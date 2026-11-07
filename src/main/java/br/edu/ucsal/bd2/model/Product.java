@@ -20,11 +20,11 @@ public class Product {
 	@Column(nullable = false)
 	private String barCode;
 	
-	@Column(nullable = false)
+	@Column(nullable = false, precision = 10, scale = 2)
 	private BigDecimal price;
 	
 	@Column(nullable = false)
-	private String nameString;
+	private String name;
 	
 	@Column(nullable = false)
 	private String description;
