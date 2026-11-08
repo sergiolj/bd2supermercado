@@ -1,4 +1,8 @@
-Convenção de COMMITS
+O que você vai encontrar nesse documento:
+1. Convenção para commits
+2. Metodologia para edições
+
+1. Convenção de COMMITS
 A estrutura dos commits deve ser dividida em três partes(Cabeçalho, Corpo e Rodapé), sendo o cabeçalho a única parte
 obrigatória.
 
@@ -47,8 +51,40 @@ refactor(statement): rename 'perf' variable to 'aPerformance'
 - Technique: Rename Variable
 - Improves lexical scope clarity and follows the book's naming convention for loop variables.
 
-
 -> Adição de arquivos e documentos complementares
-
 docs(convention): add information about how to use rules to create a commit
 docs(taxonomia): add conventional commits reference file
+
+2. METODOLOGIA PARA EDIÇÃO
+
+NUNCA FAÇA COMMITS DIRETAMENTE NA BRANCH MAIN!!
+
+2.1 Clonagem do repositório
+git clone <url-do-repositorio-aqui>
+cd <nome-da-pasta-do-projeto>
+
+2.2 Mantenha a versão mais recente na sua máquina local
+git checkout main
+git pull origin main
+
+2.3 Crie uma branch com a tarefa que irá executar usando a taxonomia de commits
+# Exemplo para refatoração
+git checkout -b refactor/extract-amount-calc
+
+# Exemplo para configuração de infraestrutura
+git checkout -b chore/update-gitignore
+
+#Exemplo para novas features
+git checkout -b feat/shoppingChart
+
+2.4 Crie commits com alterações pequenas e que funcionem de maneira independente
+git add <arquivos-modificados>
+git commit -m "feat(statement): extract amount calculation for a performance"
+
+2.5 Resolva conflitos localmente
+Se o seu desenvolvimento durar mais de algumas horas, é provável que a main remota tenha recebido novos commits de outros membros.
+git fetch origin
+git rebase origin/main
+
+2.6 Envio (Push) e integração (Pull Request)
+git push -u origin <nome-da-sua-branch>
