@@ -2,7 +2,7 @@ package br.edu.ucsal.bd2.model;
 
 import java.math.BigDecimal;
 
-
+import br.edu.ucsal.bd2.dto.request.ProductRequest;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -28,5 +28,24 @@ public class Product {
 	
 	@Column(nullable = false)
 	private String description;
+	
+	public static Product convertToEntity(ProductRequest dto) {
+		return new Product(
+				dto.name(),
+				dto.description(),
+				dto.price(),
+				dto.barCode());
+	}
+	
+	public Product() {}
+
+	public Product(String name, String description, BigDecimal price, String barCode) {
+		super();
+		this.barCode = barCode;
+		this.price = price;
+		this.name = name;
+		this.description = description;
+	}
+	
 	
 }
