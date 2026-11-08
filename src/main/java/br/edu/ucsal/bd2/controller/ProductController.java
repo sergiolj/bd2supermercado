@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import br.edu.ucsal.bd2.dto.request.ProductRequest;
 import br.edu.ucsal.bd2.dto.response.ProductResponse;
-import br.edu.ucsal.bd2.exceptions.ProductNotFoundException;
+
 import br.edu.ucsal.bd2.model.Product;
 import br.edu.ucsal.bd2.service.ProductService;
 
@@ -32,40 +32,27 @@ public class ProductController {
 	
 	@GetMapping
 	public ResponseEntity<List<ProductResponse>> findALL() {
-		try {
-			List<Product> productsList = service.findAll();
-			List<ProductResponse> responseList = productsList.stream()
-					.map(ProductResponse::convertToDTO)
-					.toList();			
-	
-					return ResponseEntity.ok(responseList);
-		}catch (IllegalArgumentException e) {
-			return ResponseEntity.badRequest().body(null);
-		}
+		List<Product> productsList = service.findAll();
+		List<ProductResponse> responseList = productsList.stream()
+				.map(ProductResponse::convertToDTO)
+				.toList();			
+
+		return ResponseEntity.ok(responseList);
 	}
-	
+
 	@GetMapping("/{productId}")
 	public ResponseEntity<ProductResponse> findById(@PathVariable Long productId){
-		try {
-			Product product = service.findByID(productId);
-			ProductResponse response = ProductResponse.convertToDTO(product);
-			return ResponseEntity.ok(response);
-			
-		}catch (ProductNotFoundException e) {
-			return ResponseEntity.notFound().build();
-		}catch (Exception e) {
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-		}
+		Product product = service.findByID(productId);
+		ProductResponse response = ProductResponse.convertToDTO(product);
+
+		return ResponseEntity.ok(response);
 	}
+
 	@PostMapping()
 	public ResponseEntity<ProductResponse> createProduct(@RequestBody ProductRequest request){
-		try {
-			Product product = service.createProduct(request);
-			ProductResponse response = ProductResponse.convertToDTO(product);
-			
-			return ResponseEntity.status(HttpStatus.CREATED).body(response);
-		}catch (Exception e) {
-			return ResponseEntity.badRequest().build();
-	}
+		Product product = service.createProduct(request);
+		ProductResponse response = ProductResponse.convertToDTO(product);
+
+		return ResponseEntity.status(HttpStatus.CREATED).body(response);
 	}
 }
