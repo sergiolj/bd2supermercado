@@ -1,51 +1,59 @@
 package br.edu.ucsal.bd2.model;
 
-import java.math.BigDecimal;
-
-import br.edu.ucsal.bd2.dto.request.ProductRequest;
+import br.edu.ucsal.bd2.util.MeasurementType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import lombok.Data;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-@Data
 @Entity
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+@Table(name = "product")
 public class Product {
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	private Long idLong;
-	
-	@Column(nullable = false)
-	private String barCode;
-	
-	@Column(nullable = false, precision = 10, scale = 2)
-	private BigDecimal price;
+	private Long id;
 	
 	@Column(nullable = false)
 	private String name;
 	
+	@ManyToOne
+	@JoinColumn(name = "brand_id")
+	private Brand brand;
+	
 	@Column(nullable = false)
-	private String description;
+	private String barCode;
 	
-	public static Product convertToEntity(ProductRequest dto) {
-		return new Product(
-				dto.name(),
-				dto.description(),
-				dto.price(),
-				dto.barCode());
-	}
+	@Column(nullable = false)
+	private MeasurementType unitType;
 	
-	public Product() {}
+	@Column(nullable = false)
+	private Double weight;
+	
+	@ManyToOne
+	@JoinColumn(name = "category_id")
+	private FoodCategory category;
 
-	public Product(String name, String description, BigDecimal price, String barCode) {
+	public Product(String name, Brand brand, String barCode, MeasurementType unitType, Double weight,
+			FoodCategory category) {
 		super();
-		this.barCode = barCode;
-		this.price = price;
 		this.name = name;
-		this.description = description;
+		this.brand = brand;
+		this.barCode = barCode;
+		this.unitType = unitType;
+		this.weight = weight;
+		this.category = category;
 	}
-	
 	
 }
