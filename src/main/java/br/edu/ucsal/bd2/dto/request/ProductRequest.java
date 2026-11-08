@@ -1,22 +1,25 @@
 package br.edu.ucsal.bd2.dto.request;
 
-import java.math.BigDecimal;
-
 import br.edu.ucsal.bd2.model.Product;
+import br.edu.ucsal.bd2.util.MeasurementType;
 
 public record ProductRequest(
 		String name,
-		String description,
+		Long brandId,
+		Long categoryId,
 		String barCode,
-		BigDecimal price
+		Double weight,
+		MeasurementType unitType
 		) {
 
 	public static ProductRequest convertToDTO(Product product) {
 		return new ProductRequest(
 				product.getName(),
-				product.getDescription(),
+				product.getBrand().getId(),
+				product.getCategory().getId(),
 				product.getBarCode(),
-				product.getPrice()
+				product.getWeight(),
+				product.getUnitType()
 				);
 		}
 }
