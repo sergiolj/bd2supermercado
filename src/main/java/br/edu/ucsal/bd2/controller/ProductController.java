@@ -7,9 +7,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import br.edu.ucsal.bd2.dto.request.ProductRequest;
 import br.edu.ucsal.bd2.dto.response.ProductResponse;
 import br.edu.ucsal.bd2.exceptions.ProductNotFoundException;
 import br.edu.ucsal.bd2.model.Product;
@@ -30,7 +34,6 @@ public class ProductController {
 	public ResponseEntity<List<ProductResponse>> findALL() {
 		try {
 			List<Product> productsList = service.findAll();
-			
 			List<ProductResponse> responseList = productsList.stream()
 					.map(ProductResponse::convertToDTO)
 					.toList();			
@@ -54,4 +57,11 @@ public class ProductController {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
 		}
 	}
-}
+	@PostMapping()
+	public ResponseEntity<ProductResponse> createProduct(@RequestBody ProductRequest request){
+		Product product = service.createProduct(request);
+		ProductResponse response = ProductResponse.convertToDTO(product);
+		
+		return ResponseEntity.status(HttpStatus.CREATED).body(response);
+		}
+	}
