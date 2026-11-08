@@ -59,9 +59,13 @@ public class ProductController {
 	}
 	@PostMapping()
 	public ResponseEntity<ProductResponse> createProduct(@RequestBody ProductRequest request){
-		Product product = service.createProduct(request);
-		ProductResponse response = ProductResponse.convertToDTO(product);
-		
-		return ResponseEntity.status(HttpStatus.CREATED).body(response);
-		}
+		try {
+			Product product = service.createProduct(request);
+			ProductResponse response = ProductResponse.convertToDTO(product);
+			
+			return ResponseEntity.status(HttpStatus.CREATED).body(response);
+		}catch (Exception e) {
+			return ResponseEntity.badRequest().build();
 	}
+	}
+}
