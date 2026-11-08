@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -26,5 +27,17 @@ public class ExceptionCatcher {
         );
         return ResponseEntity.status(status).body(error);
     }
-
+	
+	@ExceptionHandler(EntityExistsException.class)
+	public ResponseEntity<StandardError> entityAlreadExists(EntityExistsException e, HttpServletRequest request){
+        HttpStatus status = HttpStatus.CONFLICT; //409
+        StandardError error = new StandardError(
+                Instant.now(),
+                status.value(),
+                "Produto já cadastrado.",
+                e.getMessage(),
+                request.getRequestURI()
+        );
+        return ResponseEntity.status(status).body(error);
+	}
 }
