@@ -61,7 +61,6 @@ class ProductContollerTest {
                 .andExpect(jsonPath("$.brandName").value("Nestlé"))
                 
                 .andExpect(jsonPath("$.barCode").doesNotExist())
-                .andExpect(jsonPath("$.unitType").doesNotExist());;
-           
+                .andExpect(jsonPath("$.unitType").doesNotExist());   
     }
 }
