@@ -5,10 +5,14 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import lombok.Data;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
 
 @Entity
-@Data
+@AllArgsConstructor
+@Getter
+@Setter
 public class FoodCategory{
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -16,5 +20,7 @@ public class FoodCategory{
 	
 	@Column
 	private String name;
+
+	public FoodCategory() {}
 
 }
