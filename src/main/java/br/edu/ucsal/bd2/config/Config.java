@@ -35,11 +35,28 @@ public class Config {
 	CommandLineRunner loadFoodCategories(FoodCategoryRepository repository) {
 		return args->{
 			if(repository.count() == 0) {
-				FoodCategory c1 = new FoodCategory();
-				c1.setName("Bomboniere");
-				
-				repository.saveAll(List.of(c1));
+				List<String> categories = List.of(
+						"Produtos Frescos e Hortifrúti",
+						"Padaria e Confeitaria",
+						"Laticínios e Ovos",
+						"Carnes, Aves e Peixes",
+						"Mercearia e Grãos",
+						"Cereais e Matinais",
+						"Alimentos Processados e Enlatados",
+						"Congelados",
+						"Bebidas",
+						"Doces e Salgadinhos",
+						"Materiais de Limpeza",
+						"Higiene e Cuidados Pessoais",
+						"Artigos de Descarte e Papelaria",
+						"Cuidados com o Bebê",
+						"Produtos para Pet Shop"
+						);
+
+				for (String categoryName : categories) {
+					repository.save(new FoodCategory(null, categoryName));
 				}
+			}
 		};
 	}
 	
@@ -50,7 +67,7 @@ public class Config {
 		return args->{
 			if(repository.count() == 0) {
 				Brand brand = brandRepository.findById(Long.parseLong("1")).orElseThrow();
-				FoodCategory category = foodCategoryRepository.findById(Long.parseLong("1")).orElseThrow();
+				FoodCategory category = foodCategoryRepository.findByName("Doces e Salgadinhos").orElseThrow();
 				
 				Product p1 = new Product();
 				p1.setName("Chocolate Classic ao Leite");

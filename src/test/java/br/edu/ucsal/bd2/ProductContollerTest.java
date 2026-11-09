@@ -25,6 +25,7 @@ import br.edu.ucsal.bd2.model.Product;
 
 import br.edu.ucsal.bd2.service.ProductService;
 import br.edu.ucsal.bd2.util.MeasurementType;
+import jakarta.persistence.EntityExistsException;
 
 @WebMvcTest(ProductController.class)
 class ProductContollerTest {
@@ -63,4 +64,33 @@ class ProductContollerTest {
                 .andExpect(jsonPath("$.barCode").doesNotExist())
                 .andExpect(jsonPath("$.unitType").doesNotExist());   
     }
+	
+	@Test
+	@DisplayName("Should return HTTP 409 Conflict when adding a product a existent product")
+	void shouldReturnConflictWhenEntityAlreadyExists() throws Exception{
+		String errorMessage = "Produto já cadastrado.";
+		String requestURI = "/api/product";
+		
+		Brand brand = new Brand(1L, "Nestlé");
+		FoodCategory category = new FoodCategory(1L, "Bomboniere");
+		
+		Product product = new Product(1L, "Chocolate Classic ao Leite", brand, "1112223334445", MeasurementType.GRAM, 80.0, category);
+		
+		ProductRequest requestDTO = ProductRequest.convertToDTO(product);
+
+        when(service.createProduct(any()))
+        		.thenThrow(new EntityExistsException(errorMessage));
+        
+        mockMvc.perform(post("/api/product")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(requestDTO)))
+                .andExpect(status().isConflict())
+                
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value(errorMessage))
+                .andExpect(jsonPath("$.message").value("Produto já cadastrado."))
+                .andExpect(jsonPath("$.path").value(requestURI))
+                .andExpect(jsonPath("$.timestamp").exists());
+
+	}
 }
