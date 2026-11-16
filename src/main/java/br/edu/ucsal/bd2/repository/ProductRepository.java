@@ -2,6 +2,7 @@ package br.edu.ucsal.bd2.repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -13,7 +14,7 @@ public interface ProductRepository extends JpaRepository<Product, Long>{
 
 	List<Product> findByDeletedAtIsNull();
 
-	Optional<Product> findByIdAndDeletedAtIsNull(Long id);
+	Optional<Product> findByUuidAndDeletedAtIsNull(UUID uuid);
 
 	List<Product> findByCategoryIdAndDeletedAtIsNull(Long categoryId);
 
@@ -21,6 +22,6 @@ public interface ProductRepository extends JpaRepository<Product, Long>{
 
 	boolean existsByBarcode(String barcode);
 
-	boolean existsByBarcodeAndIdNot(String barcode, Long id);
+	boolean existsByBarcodeAndUuidNot(String barcode, UUID uuid);
 
 }

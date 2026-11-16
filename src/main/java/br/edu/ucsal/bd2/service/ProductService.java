@@ -2,6 +2,7 @@ package br.edu.ucsal.bd2.service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,9 +30,9 @@ public class ProductService {
 		}
 
 	// Produto apagado (deletedAt preenchido) é tratado como inexistente.
-	public Product findByID(Long productId) {
-		return repository.findByIdAndDeletedAtIsNull(productId)
-				.orElseThrow(() -> new EntityNotFoundException("Produto com id: " + productId + " não encontrado."));
+	public Product findByUuid(UUID productUuid) {
+		return repository.findByUuidAndDeletedAtIsNull(productUuid)
+				.orElseThrow(() -> new EntityNotFoundException("Produto com uuid: " + productUuid + " não encontrado."));
 		}
 
 	@Transactional
@@ -40,7 +41,7 @@ public class ProductService {
 			throw new EntityExistsException("Produto já existe com esse código de barras.");
 		}
 
-		Category category = findCategory(dto.categoryId());
+		Category category = findCategory(dto.categoryUuid());
 
 		Product product = new Product(
 				dto.name(),
@@ -54,16 +55,16 @@ public class ProductService {
 		}
 
 	@Transactional
-	public Product updateProduct(Long productId, ProductRequest dto) {
-		Product product = findByID(productId);
+	public Product updateProduct(UUID productUuid, ProductRequest dto) {
+		Product product = findByUuid(productUuid);
 
-		// "AndIdNot" ignora o próprio produto, senão salvar sem mudar o código daria conflito.
-		if(repository.existsByBarcodeAndIdNot(dto.barcode(), productId)){
+		// "AndUuidNot" ignora o próprio produto, senão salvar sem mudar o código daria conflito.
+		if(repository.existsByBarcodeAndUuidNot(dto.barcode(), productUuid)){
 			throw new EntityExistsException("Produto já existe com esse código de barras.");
 		}
 
 		product.setName(dto.name());
-		product.setCategory(findCategory(dto.categoryId()));
+		product.setCategory(findCategory(dto.categoryUuid()));
 		product.setBarcode(dto.barcode());
 		product.setDescription(dto.description());
 		product.setUnitOfMeasure(dto.unitOfMeasure());
@@ -73,15 +74,15 @@ public class ProductService {
 
 	// Soft delete: o registro continua no banco (preserva vendas e movimentações antigas).
 	@Transactional
-	public void deleteProduct(Long productId) {
-		Product product = findByID(productId);
+	public void deleteProduct(UUID productUuid) {
+		Product product = findByUuid(productUuid);
 		product.setDeletedAt(Instant.now());
 
 		repository.save(product);
 		}
 
-	private Category findCategory(Long categoryId) {
-		return categoryRepository.findByIdAndDeletedAtIsNull(categoryId)
-				.orElseThrow(() -> new EntityNotFoundException("Categoria com id: " + categoryId + " não encontrada."));
+	private Category findCategory(UUID categoryUuid) {
+		return categoryRepository.findByUuidAndDeletedAtIsNull(categoryUuid)
+				.orElseThrow(() -> new EntityNotFoundException("Categoria com uuid: " + categoryUuid + " não encontrada."));
 		}
 }

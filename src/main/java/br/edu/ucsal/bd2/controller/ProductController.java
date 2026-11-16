@@ -1,6 +1,7 @@
 package br.edu.ucsal.bd2.controller;
 
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
 
@@ -42,9 +43,9 @@ public class ProductController {
 		return ResponseEntity.ok(responseList);
 	}
 
-	@GetMapping("/{productId}")
-	public ResponseEntity<ProductResponse> findById(@PathVariable Long productId){
-		Product product = service.findByID(productId);
+	@GetMapping("/{productUuid}")
+	public ResponseEntity<ProductResponse> findByUuid(@PathVariable UUID productUuid){
+		Product product = service.findByUuid(productUuid);
 		ProductResponse response = ProductResponse.convertToDTO(product);
 
 		return ResponseEntity.ok(response);
@@ -58,17 +59,17 @@ public class ProductController {
 		return ResponseEntity.status(HttpStatus.CREATED).body(response);
 	}
 
-	@PutMapping("/{productId}")
-	public ResponseEntity<ProductResponse> updateProduct(@PathVariable Long productId, @RequestBody ProductRequest request){
-		Product product = service.updateProduct(productId, request);
+	@PutMapping("/{productUuid}")
+	public ResponseEntity<ProductResponse> updateProduct(@PathVariable UUID productUuid, @RequestBody ProductRequest request){
+		Product product = service.updateProduct(productUuid, request);
 		ProductResponse response = ProductResponse.convertToDTO(product);
 
 		return ResponseEntity.ok(response);
 	}
 
-	@DeleteMapping("/{productId}")
-	public ResponseEntity<Void> deleteProduct(@PathVariable Long productId){
-		service.deleteProduct(productId);
+	@DeleteMapping("/{productUuid}")
+	public ResponseEntity<Void> deleteProduct(@PathVariable UUID productUuid){
+		service.deleteProduct(productUuid);
 
 		return ResponseEntity.noContent().build();
 	}

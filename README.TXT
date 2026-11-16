@@ -111,6 +111,28 @@ Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm p
 
 Os testes automatizados (./mvnw test) usam H2 em memória e não precisam do PostgreSQL.
 
+Dados de exemplo (seed)
+Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 15 funcionários e
+2.000 vendas distribuídas em 26 meses, com histórico de preços, pagamentos, compras e perdas de estoque
+coerentes entre si. Leva alguns segundos.
+
+./mvnw -Pseed                (PowerShell: .\mvnw -Pseed)
+
+Funciona inclusive com o banco recém-criado e vazio: cria as tabelas e os triggers, popula e encerra sozinho
+(sobe o Spring sem servidor web, só para reaproveitar a conexão do .env; leva ~15 s). Não precisa de psql.
+
+Alternativa, direto no banco (a aplicação precisa ter subido ao menos uma vez, para criar tabelas e triggers):
+psql -U postgres -d grocery -f src/main/resources/db/seed.sql
+
+Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:run "-Dspring-boot.run.profiles=seed"
+
+- O seed é idempotente: se o banco já tiver fornecedores, funcionários, preços, vendas ou estoque, ele não faz nada.
+- Para refazer do zero (apaga TODOS os dados):
+  TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, staff RESTART IDENTITY CASCADE;
+  Ao subir a aplicação de novo o Config.java recria as categorias e o produto básicos, e o seed completa o resto.
+- A tabela inventory não é escrita pelo seed: ele só insere inventory_movement e o trigger mantém o estoque.
+- As datas acompanham o dia em que o seed roda (a janela de vendas termina em "ontem").
+
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
 
