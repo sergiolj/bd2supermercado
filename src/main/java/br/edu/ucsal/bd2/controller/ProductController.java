@@ -5,9 +5,11 @@ import java.util.List;
 import org.springframework.http.HttpStatus;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -23,19 +25,19 @@ import br.edu.ucsal.bd2.service.ProductService;
 @RestController
 @RequestMapping("/api/product")
 public class ProductController {
-	
+
 	private final ProductService service;
-	
+
 	public ProductController(ProductService service) {
 		this.service = service;
 		}
-	
+
 	@GetMapping
 	public ResponseEntity<List<ProductResponse>> findALL() {
 		List<Product> productsList = service.findAll();
 		List<ProductResponse> responseList = productsList.stream()
 				.map(ProductResponse::convertToDTO)
-				.toList();			
+				.toList();
 
 		return ResponseEntity.ok(responseList);
 	}
@@ -54,5 +56,20 @@ public class ProductController {
 		ProductResponse response = ProductResponse.convertToDTO(product);
 
 		return ResponseEntity.status(HttpStatus.CREATED).body(response);
+	}
+
+	@PutMapping("/{productId}")
+	public ResponseEntity<ProductResponse> updateProduct(@PathVariable Long productId, @RequestBody ProductRequest request){
+		Product product = service.updateProduct(productId, request);
+		ProductResponse response = ProductResponse.convertToDTO(product);
+
+		return ResponseEntity.ok(response);
+	}
+
+	@DeleteMapping("/{productId}")
+	public ResponseEntity<Void> deleteProduct(@PathVariable Long productId){
+		service.deleteProduct(productId);
+
+		return ResponseEntity.noContent().build();
 	}
 }
