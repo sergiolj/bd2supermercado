@@ -91,14 +91,70 @@ git rebase origin/main
 git push -u origin <nome-da-sua-branch>
 
 3.FERRAMENTAS DE TESTE
-Banco de dados H2
-http://localhost:8080/h2-console/
-JDBC URL: jdbc:h2:mem:grocery
-User Name: sa
-Password:
+Banco de dados PostgreSQL
+A aplicação usa PostgreSQL (as tabelas são criadas automaticamente pelo Hibernate ao subir a aplicação).
+1) Crie o banco uma única vez (ex.: psql -U postgres, ou pelo DBeaver):
+
+CREATE DATABASE grocery;
+
+2) Crie o seu arquivo .env na raiz do projeto copiando o modelo e ajustando a senha:
+
+copy .env.example .env      (Windows)
+cp .env.example .env        (Linux/Mac)
+
+Variáveis do .env (o arquivo NÃO é versionado, cada dev tem o seu):
+DB_URL      jdbc:postgresql://localhost:5432/grocery   (opcional, este é o padrão)
+DB_USERNAME seu usuário do PostgreSQL
+DB_PASSWORD sua senha do PostgreSQL
+
+Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm prioridade sobre o .env.
+
+Os testes automatizados (./mvnw test) também usam o PostgreSQL configurado no .env: o teste de contexto
+(GrocerystoreApplicationTests) sobe a aplicação inteira e conecta no banco, então o PostgreSQL precisa estar rodando.
+
+Dados de exemplo (seed)
+Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 15 funcionários e
+2.000 vendas distribuídas em 26 meses, com histórico de preços, pagamentos, compras e perdas de estoque
+coerentes entre si. Leva alguns segundos.
+
+./mvnw -Pseed                (PowerShell: .\mvnw -Pseed)
+
+Funciona inclusive com o banco recém-criado e vazio: cria as tabelas e os triggers, popula e encerra sozinho
+(sobe o Spring sem servidor web, só para reaproveitar a conexão do .env; leva ~15 s). Não precisa de psql.
+
+Alternativa, direto no banco (a aplicação precisa ter subido ao menos uma vez, para criar tabelas e triggers):
+psql -U postgres -d grocery -f src/main/resources/db/seed.sql
+
+Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:run "-Dspring-boot.run.profiles=seed"
+
+- O seed é idempotente: se o banco já tiver fornecedores, funcionários, preços, vendas ou estoque, ele não faz nada.
+- Para refazer do zero (apaga TODOS os dados):
+  TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, staff RESTART IDENTITY CASCADE;
+  Ao subir a aplicação de novo o Config.java recria as categorias e o produto básicos, e o seed completa o resto.
+- A tabela inventory não é escrita pelo seed: ele só insere inventory_movement e o trigger mantém o estoque.
+- As datas acompanham o dia em que o seed roda (a janela de vendas termina em "ontem").
 
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
+
+Paginação
+As listagens (ex.: GET /api/product) são paginadas, nunca devolvem a tabela inteira.
+Parâmetros opcionais na URL:
+  page   número da página, começando em 0 (padrão 0)
+  size   itens por página (padrão 20; acima de 100 é reduzido para 100)
+  sort   campo,direção - ex.: sort=name,desc (padrão: name crescente). Pode repetir: sort=category.name&sort=name
+         Produtos aceitam: name, barcode, createdAt, category.name. Qualquer outro valor retorna 400 listando os permitidos.
+Exemplo: GET /api/product?page=2&size=50&sort=name,asc
+Resposta: { "content": [...], "page", "size", "totalElements", "totalPages", "first", "last" }
+Padrão e máximo de size ficam em application.properties (spring.data.web.pageable.*).
+O id é acrescentado como último critério de ordenação, para a ordem não variar de uma página para outra.
+
+Para paginar outra entidade:
+  repository  Page<Entidade> findBy...(Pageable pageable)   (com @EntityGraph se o DTO usar uma relação)
+  service     SortPolicy.allowing("campo1", "campo2") define o que o cliente pode ordenar;
+              o método faz repository.findBy...(SORT_POLICY.apply(pageable)) e devolve Page<Entidade>
+  controller  (@ParameterObject @SortDefault(sort = "campo") Pageable pageable) e
+              PageResponse.from(page, Dto::convertToDTO)
 
 
 
