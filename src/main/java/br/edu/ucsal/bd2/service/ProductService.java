@@ -1,9 +1,10 @@
 package br.edu.ucsal.bd2.service;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,6 +13,7 @@ import br.edu.ucsal.bd2.model.Category;
 import br.edu.ucsal.bd2.model.Product;
 import br.edu.ucsal.bd2.repository.CategoryRepository;
 import br.edu.ucsal.bd2.repository.ProductRepository;
+import br.edu.ucsal.bd2.util.SortPolicy;
 import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.AllArgsConstructor;
@@ -24,9 +26,12 @@ public class ProductService {
 	private final CategoryRepository categoryRepository;
 
 
-	// Soft delete: só lista produtos ativos (deletedAt nulo).
-	public List<Product> findAll(){
-		return repository.findByDeletedAtIsNull();
+	// Campos que o cliente pode usar em ?sort= na listagem de produtos.
+	private static final SortPolicy SORT_POLICY = SortPolicy.allowing("name", "barcode", "createdAt", "category.name");
+
+	// Soft delete: só lista produtos ativos (deletedAt nulo). Devolve uma página, nunca a tabela inteira.
+	public Page<Product> findAll(Pageable pageable){
+		return repository.findByDeletedAtIsNull(SORT_POLICY.apply(pageable));
 		}
 
 	// Produto apagado (deletedAt preenchido) é tratado como inexistente.

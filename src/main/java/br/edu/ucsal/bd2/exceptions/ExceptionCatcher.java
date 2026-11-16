@@ -28,6 +28,19 @@ public class ExceptionCatcher {
         return ResponseEntity.status(status).body(error);
     }
 	
+	@ExceptionHandler(InvalidSortException.class)
+	public ResponseEntity<StandardError> invalidSort(InvalidSortException e, HttpServletRequest request){
+		HttpStatus status = HttpStatus.BAD_REQUEST; //400
+		StandardError error = new StandardError(
+				Instant.now(),
+				status.value(),
+				"Ordenação inválida.",
+				e.getMessage(),
+				request.getRequestURI()
+		);
+		return ResponseEntity.status(status).body(error);
+	}
+
 	@ExceptionHandler(EntityExistsException.class)
 	public ResponseEntity<StandardError> entityAlreadExists(EntityExistsException e, HttpServletRequest request){
         HttpStatus status = HttpStatus.CONFLICT; //409

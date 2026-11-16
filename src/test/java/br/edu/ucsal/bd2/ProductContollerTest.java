@@ -3,6 +3,7 @@ package br.edu.ucsal.bd2;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -17,8 +18,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -27,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import br.edu.ucsal.bd2.controller.ProductController;
 import br.edu.ucsal.bd2.dto.request.ProductRequest;
+import br.edu.ucsal.bd2.exceptions.InvalidSortException;
 import br.edu.ucsal.bd2.model.Category;
 import br.edu.ucsal.bd2.model.Product;
 
@@ -127,17 +135,105 @@ class ProductContollerTest {
 	}
 
 	@Test
-	@DisplayName("Should list products without the internal id")
+	@DisplayName("Should list products in a page without the internal id")
 	void shouldListProductsWithoutId() throws Exception{
 		Product product = newProduct();
 
-		when(service.findAll()).thenReturn(List.of(product));
+		when(service.findAll(any(Pageable.class)))
+				.thenReturn(new PageImpl<>(List.of(product), PageRequest.of(0, 20), 1));
 
 		mockMvc.perform(get("/api/product"))
 				.andExpect(status().isOk())
 
-				.andExpect(jsonPath("$[0].uuid").value(product.getUuid().toString()))
-				.andExpect(jsonPath("$[0].id").doesNotExist());
+				.andExpect(jsonPath("$.content[0].uuid").value(product.getUuid().toString()))
+				.andExpect(jsonPath("$.content[0].id").doesNotExist())
+
+				.andExpect(jsonPath("$.page").value(0))
+				.andExpect(jsonPath("$.size").value(20))
+				.andExpect(jsonPath("$.totalElements").value(1))
+				.andExpect(jsonPath("$.totalPages").value(1))
+				.andExpect(jsonPath("$.first").value(true))
+				.andExpect(jsonPath("$.last").value(true));
+	}
+
+	@Test
+	@DisplayName("Should describe the position of the page in the response")
+	void shouldReturnPageMetadata() throws Exception{
+		Product product = newProduct();
+
+		when(service.findAll(any(Pageable.class)))
+				.thenReturn(new PageImpl<>(List.of(product), PageRequest.of(2, 5), 53));
+
+		mockMvc.perform(get("/api/product").param("page", "2").param("size", "5"))
+				.andExpect(status().isOk())
+
+				.andExpect(jsonPath("$.page").value(2))
+				.andExpect(jsonPath("$.size").value(5))
+				.andExpect(jsonPath("$.totalElements").value(53))
+				.andExpect(jsonPath("$.totalPages").value(11))
+				.andExpect(jsonPath("$.first").value(false))
+				.andExpect(jsonPath("$.last").value(false));
+	}
+
+	@Test
+	@DisplayName("Should send page, size and sort from the URL to the service")
+	void shouldPassPagingParametersToService() throws Exception{
+		when(service.findAll(any(Pageable.class))).thenReturn(Page.empty());
+
+		mockMvc.perform(get("/api/product").param("page", "2").param("size", "5").param("sort", "name,desc"))
+				.andExpect(status().isOk());
+
+		Pageable pageable = capturePageable();
+		assertEquals(2, pageable.getPageNumber());
+		assertEquals(5, pageable.getPageSize());
+		assertEquals(Sort.by(Sort.Order.desc("name")), pageable.getSort());
+	}
+
+	@Test
+	@DisplayName("Should list 20 products ordered by name when no paging parameters are sent")
+	void shouldUseDefaultPaging() throws Exception{
+		when(service.findAll(any(Pageable.class))).thenReturn(Page.empty());
+
+		mockMvc.perform(get("/api/product"))
+				.andExpect(status().isOk());
+
+		Pageable pageable = capturePageable();
+		assertEquals(0, pageable.getPageNumber());
+		assertEquals(20, pageable.getPageSize());
+		assertEquals(Sort.by(Sort.Order.asc("name")), pageable.getSort());
+	}
+
+	@Test
+	@DisplayName("Should cap the page size at 100 instead of listing everything")
+	void shouldCapPageSize() throws Exception{
+		when(service.findAll(any(Pageable.class))).thenReturn(Page.empty());
+
+		mockMvc.perform(get("/api/product").param("size", "5000"))
+				.andExpect(status().isOk());
+
+		assertEquals(100, capturePageable().getPageSize());
+	}
+
+	@Test
+	@DisplayName("Should return HTTP 400 when sorting by a field that does not exist")
+	void shouldRejectInvalidSortField() throws Exception{
+		when(service.findAll(any(Pageable.class)))
+				.thenThrow(new InvalidSortException("foo", List.of("name", "barcode")));
+
+		mockMvc.perform(get("/api/product").param("sort", "foo"))
+				.andExpect(status().isBadRequest())
+
+				.andExpect(jsonPath("$.status").value(400))
+				.andExpect(jsonPath("$.error").value("Ordenação inválida."))
+				.andExpect(jsonPath("$.message").value("Não é possível ordenar por 'foo'. Campos permitidos: name, barcode."))
+				.andExpect(jsonPath("$.path").value("/api/product"));
+	}
+
+	// Pega o Pageable que o controller montou a partir da URL e entregou ao service.
+	private Pageable capturePageable() {
+		ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+		verify(service).findAll(captor.capture());
+		return captor.getValue();
 	}
 
 	@Test

@@ -109,7 +109,8 @@ DB_PASSWORD sua senha do PostgreSQL
 
 Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm prioridade sobre o .env.
 
-Os testes automatizados (./mvnw test) usam H2 em memória e não precisam do PostgreSQL.
+Os testes automatizados (./mvnw test) também usam o PostgreSQL configurado no .env: o teste de contexto
+(GrocerystoreApplicationTests) sobe a aplicação inteira e conecta no banco, então o PostgreSQL precisa estar rodando.
 
 Dados de exemplo (seed)
 Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 15 funcionários e
@@ -135,6 +136,25 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
+
+Paginação
+As listagens (ex.: GET /api/product) são paginadas, nunca devolvem a tabela inteira.
+Parâmetros opcionais na URL:
+  page   número da página, começando em 0 (padrão 0)
+  size   itens por página (padrão 20; acima de 100 é reduzido para 100)
+  sort   campo,direção - ex.: sort=name,desc (padrão: name crescente). Pode repetir: sort=category.name&sort=name
+         Produtos aceitam: name, barcode, createdAt, category.name. Qualquer outro valor retorna 400 listando os permitidos.
+Exemplo: GET /api/product?page=2&size=50&sort=name,asc
+Resposta: { "content": [...], "page", "size", "totalElements", "totalPages", "first", "last" }
+Padrão e máximo de size ficam em application.properties (spring.data.web.pageable.*).
+O id é acrescentado como último critério de ordenação, para a ordem não variar de uma página para outra.
+
+Para paginar outra entidade:
+  repository  Page<Entidade> findBy...(Pageable pageable)   (com @EntityGraph se o DTO usar uma relação)
+  service     SortPolicy.allowing("campo1", "campo2") define o que o cliente pode ordenar;
+              o método faz repository.findBy...(SORT_POLICY.apply(pageable)) e devolve Page<Entidade>
+  controller  (@ParameterObject @SortDefault(sort = "campo") Pageable pageable) e
+              PageResponse.from(page, Dto::convertToDTO)
 
 
 
