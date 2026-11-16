@@ -1,5 +1,7 @@
 package br.edu.ucsal.bd2;
 
+import java.util.UUID;
+
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -19,8 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import br.edu.ucsal.bd2.controller.ProductController;
 import br.edu.ucsal.bd2.dto.request.ProductRequest;
-import br.edu.ucsal.bd2.model.Brand;
-import br.edu.ucsal.bd2.model.FoodCategory;
+import br.edu.ucsal.bd2.model.Category;
 import br.edu.ucsal.bd2.model.Product;
 
 import br.edu.ucsal.bd2.service.ProductService;
@@ -42,11 +43,12 @@ class ProductContollerTest {
 	@Test
 	@DisplayName("Should return HPPT 201 Created and Location header when adding a product")
 	void shouldCreateProduct() throws Exception{
-		Brand brand = new Brand(1L, "Nestlé");
-		FoodCategory category = new FoodCategory(1L, "Bomboniere");
-		
-		Product product = new Product(1L, "Bombom Alpino", brand, "1112223334445", MeasurementType.GRAM, 100.0, category);
-				
+		Category category = new Category(1L, "Bomboniere");
+
+		Product product = new Product("Bombom Alpino", category, "1112223334445", "Bombom de chocolate com recheio", MeasurementType.UNIT);
+		product.setId(1L);
+		product.setUuid(UUID.randomUUID());
+
 		ProductRequest requestDTO = ProductRequest.convertToDTO(product);
 
         when(service.createProduct(any(ProductRequest.class))).thenReturn(product);
@@ -55,14 +57,15 @@ class ProductContollerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(requestDTO)))
                 .andExpect(status().isCreated())
-                
+
                 .andExpect(jsonPath("$.id").value(1L))
+                .andExpect(jsonPath("$.uuid").value(product.getUuid().toString()))
                 .andExpect(jsonPath("$.name").value("Bombom Alpino"))
-                .andExpect(jsonPath("$.weight").value(100.0))
-                .andExpect(jsonPath("$.brandName").value("Nestlé"))
-                
-                .andExpect(jsonPath("$.barCode").doesNotExist())
-                .andExpect(jsonPath("$.unitType").doesNotExist());   
+                .andExpect(jsonPath("$.description").value("Bombom de chocolate com recheio"))
+                .andExpect(jsonPath("$.categoryName").value("Bomboniere"))
+
+                .andExpect(jsonPath("$.barcode").doesNotExist())
+                .andExpect(jsonPath("$.unitOfMeasure").doesNotExist());
     }
 	
 	@Test
@@ -70,12 +73,11 @@ class ProductContollerTest {
 	void shouldReturnConflictWhenEntityAlreadyExists() throws Exception{
 		String errorMessage = "Produto já cadastrado.";
 		String requestURI = "/api/product";
-		
-		Brand brand = new Brand(1L, "Nestlé");
-		FoodCategory category = new FoodCategory(1L, "Bomboniere");
-		
-		Product product = new Product(1L, "Chocolate Classic ao Leite", brand, "1112223334445", MeasurementType.GRAM, 80.0, category);
-		
+
+		Category category = new Category(1L, "Bomboniere");
+
+		Product product = new Product("Chocolate Classic ao Leite", category, "1112223334445", "Barra de chocolate ao leite 80g", MeasurementType.UNIT);
+
 		ProductRequest requestDTO = ProductRequest.convertToDTO(product);
 
         when(service.createProduct(any()))

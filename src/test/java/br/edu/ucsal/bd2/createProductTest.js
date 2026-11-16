@@ -5,9 +5,10 @@ fetch('http://localhost:8080/api/product', {
   },
   body: JSON.stringify({
     name: "Feijão Fradinho Kicaldo 1kg",
+    categoryId: 5,
+    barcode: "1223456667778",
     description: "Feijão em pacote",
-    barCode: "1223456667778",
-    price:"29.95"
+    unitOfMeasure: "UNIT"
   })
 })
 .then(async response => {

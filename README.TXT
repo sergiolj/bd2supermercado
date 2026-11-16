@@ -91,11 +91,25 @@ git rebase origin/main
 git push -u origin <nome-da-sua-branch>
 
 3.FERRAMENTAS DE TESTE
-Banco de dados H2
-http://localhost:8080/h2-console/
-JDBC URL: jdbc:h2:mem:grocery
-User Name: sa
-Password:
+Banco de dados PostgreSQL
+A aplicação usa PostgreSQL (as tabelas são criadas automaticamente pelo Hibernate ao subir a aplicação).
+1) Crie o banco uma única vez (ex.: psql -U postgres, ou pelo DBeaver):
+
+CREATE DATABASE grocery;
+
+2) Crie o seu arquivo .env na raiz do projeto copiando o modelo e ajustando a senha:
+
+copy .env.example .env      (Windows)
+cp .env.example .env        (Linux/Mac)
+
+Variáveis do .env (o arquivo NÃO é versionado, cada dev tem o seu):
+DB_URL      jdbc:postgresql://localhost:5432/grocery   (opcional, este é o padrão)
+DB_USERNAME seu usuário do PostgreSQL
+DB_PASSWORD sua senha do PostgreSQL
+
+Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm prioridade sobre o .env.
+
+Os testes automatizados (./mvnw test) usam H2 em memória e não precisam do PostgreSQL.
 
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
