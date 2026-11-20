@@ -1,0 +1,30 @@
+# Só o banco (PostgreSQL) em container, opcional: quem tem PostgreSQL instalado pode rodar sem Docker.
+# A API roda na sua máquina, pelo terminal (./mvnw spring-boot:run) ou pela IDE.
+#
+#   docker compose up -d              sobe o banco em segundo plano
+#   docker compose logs -f postgres   acompanha o log do banco
+#   docker compose stop               para o banco, mantendo os dados
+#   docker compose down -v            remove o container E APAGA os dados
+#
+# Usuário, senha e porta vêm do mesmo .env usado pela aplicação (veja .env.example).
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: grocery-pg
+    environment:
+      POSTGRES_DB: grocery
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no arquivo .env (copie o .env.example)}
+    ports:
+      # Só aceita conexões da própria máquina. Troque DB_PORT no .env se a 5432 já estiver em uso.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d grocery"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

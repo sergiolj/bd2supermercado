@@ -93,21 +93,55 @@ git push -u origin <nome-da-sua-branch>
 3.FERRAMENTAS DE TESTE
 Banco de dados PostgreSQL
 A aplicação usa PostgreSQL (as tabelas são criadas automaticamente pelo Hibernate ao subir a aplicação).
-1) Crie o banco uma única vez (ex.: psql -U postgres, ou pelo DBeaver):
+O banco pode rodar em um container Docker (opção A) ou ser um PostgreSQL instalado na máquina (opção B).
+Nos dois casos a API roda na sua máquina (precisa do JDK 21 ou mais novo) e o .env é o mesmo.
 
-CREATE DATABASE grocery;
-
-2) Crie o seu arquivo .env na raiz do projeto copiando o modelo e ajustando a senha:
+1) Crie o seu arquivo .env na raiz do projeto copiando o modelo e ajustando a senha:
 
 copy .env.example .env      (Windows)
 cp .env.example .env        (Linux/Mac)
 
 Variáveis do .env (o arquivo NÃO é versionado, cada dev tem o seu):
-DB_URL      jdbc:postgresql://localhost:5432/grocery   (opcional, este é o padrão)
-DB_USERNAME seu usuário do PostgreSQL
-DB_PASSWORD sua senha do PostgreSQL
+DB_PORT     porta do PostgreSQL na sua máquina (padrão 5432)
+DB_USERNAME usuário do PostgreSQL (no modelo: postgres)
+DB_PASSWORD senha do PostgreSQL
+API_PORT    porta da API (padrão 8080)
+DB_URL      opcional: URL JDBC completa; se definida, a aplicação ignora DB_PORT
 
+Não use aspas nem o caractere $ nos valores: o .env é lido pela aplicação e também pelo docker compose.
 Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm prioridade sobre o .env.
+
+2A) Banco em Docker (não precisa instalar PostgreSQL):
+
+docker compose up -d
+
+Sobe o container grocery-pg (PostgreSQL 17, já com o banco grocery). A API não vai no Docker: suba pelo terminal
+(./mvnw spring-boot:run) ou pela IDE, como em 2B.
+
+Banco (DBeaver, psql): host localhost, porta DB_PORT, banco grocery, usuário e senha do .env
+Swagger (com a API no ar): http://localhost:8080/swagger-ui/index.html
+
+Quando a API termina de subir, ela escreve no log um resumo com a URL do Swagger e a URL de conexão com o banco,
+já com as portas do seu .env.
+
+Se a 5432 ou a 8080 já estiverem em uso na sua máquina (outro PostgreSQL ou outro projeto), troque DB_PORT
+e/ou API_PORT no .env antes de subir (ex.: DB_PORT=5544, API_PORT=8081).
+
+docker compose logs -f postgres   acompanha o log do banco
+docker compose stop               para o banco, mantendo os dados
+docker compose down -v            remove o container E APAGA os dados
+
+Usuário e senha só são aplicados quando o banco é criado pela primeira vez. Se mudar DB_USERNAME ou DB_PASSWORD
+depois, rode docker compose down -v e suba de novo (isso apaga os dados).
+
+2B) Com PostgreSQL instalado na máquina:
+Crie o banco uma única vez (ex.: psql -U postgres, ou pelo DBeaver):
+
+CREATE DATABASE grocery;
+
+Deixe DB_PORT com a porta do seu PostgreSQL (normalmente 5432) e suba a aplicação (precisa do JDK 21 ou mais novo):
+
+./mvnw spring-boot:run       (PowerShell: .\mvnw spring-boot:run)
 
 Os testes automatizados (./mvnw test) também usam o PostgreSQL configurado no .env: o teste de contexto
 (GrocerystoreApplicationTests) sobe a aplicação inteira e conecta no banco, então o PostgreSQL precisa estar rodando.
@@ -123,7 +157,11 @@ Funciona inclusive com o banco recém-criado e vazio: cria as tabelas e os trigg
 (sobe o Spring sem servidor web, só para reaproveitar a conexão do .env; leva ~15 s). Não precisa de psql.
 
 Alternativa, direto no banco (a aplicação precisa ter subido ao menos uma vez, para criar tabelas e triggers):
-psql -U postgres -d grocery -f src/main/resources/db/seed.sql
+psql -U postgres -d grocery -f src/main/resources/db/seed.sql            (PostgreSQL local)
+
+Com Docker:
+docker cp src/main/resources/db/seed.sql grocery-pg:/tmp/seed.sql
+docker exec grocery-pg psql -U postgres -d grocery -f /tmp/seed.sql
 
 Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:run "-Dspring-boot.run.profiles=seed"
 
@@ -131,6 +169,8 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 - Para refazer do zero (apaga TODOS os dados):
   TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, staff RESTART IDENTITY CASCADE;
   Ao subir a aplicação de novo o Config.java recria as categorias e o produto básicos, e o seed completa o resto.
+  Com Docker, o console do banco abre com: docker exec -it grocery-pg psql -U postgres -d grocery
+  (ou recrie tudo com docker compose down -v seguido de docker compose up -d).
 - A tabela inventory não é escrita pelo seed: ele só insere inventory_movement e o trigger mantém o estoque.
 - As datas acompanham o dia em que o seed roda (a janela de vendas termina em "ontem").
 
