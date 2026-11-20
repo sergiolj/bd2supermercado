@@ -44,10 +44,10 @@ public class CustomerDAO extends GenericDAO<Customer, Long> {
         return Optional.of(result.get(0));
     }
 
-    // Conta também os excluídos: o unique do banco vale para todas as linhas
+    // Olha Person (clientes e funcionários, inclusive excluídos): o CPF é único na tabela person
     public boolean existsByTaxNumber(String taxNumber) {
         Long total = em.createQuery(
-                        "SELECT COUNT(c) FROM Customer c WHERE c.taxNumber = :taxNumber", Long.class)
+                        "SELECT COUNT(p) FROM Person p WHERE p.taxNumber = :taxNumber", Long.class)
                 .setParameter("taxNumber", taxNumber)
                 .getSingleResult();
         return total > 0;
@@ -55,7 +55,7 @@ public class CustomerDAO extends GenericDAO<Customer, Long> {
 
     public boolean existsByTaxNumberInAnotherCustomer(String taxNumber, UUID uuid) {
         Long total = em.createQuery(
-                        "SELECT COUNT(c) FROM Customer c WHERE c.taxNumber = :taxNumber AND c.uuid <> :uuid", Long.class)
+                        "SELECT COUNT(p) FROM Person p WHERE p.taxNumber = :taxNumber AND p.uuid <> :uuid", Long.class)
                 .setParameter("taxNumber", taxNumber)
                 .setParameter("uuid", uuid)
                 .getSingleResult();

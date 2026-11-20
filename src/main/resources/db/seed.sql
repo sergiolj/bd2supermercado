@@ -35,7 +35,7 @@
 --   * Documentos (CPF/CNPJ) e codigos de barras (EAN-13) tem digito verificador valido; CPF/CNPJ
 --     guardados so com digitos. Itens pesaveis usam EAN-13 interno (prefixo 2).
 --   * Para recomecar do zero:  TRUNCATE sale, payment, sale_items, inventory_movement, inventory,
---     price, product, category, supplier, staff RESTART IDENTITY CASCADE;
+--     price, product, category, supplier, staff, customer, person RESTART IDENTITY CASCADE;
 
 SET client_encoding TO 'UTF8';;
 
@@ -739,17 +739,23 @@ BEGIN
         (14, 'Rafael Mendes Carvalho',     'STOCKIST', v_start - 100, NULL),
         (15, 'Isabela Correia Andrade',    'STOCKIST', v_start + 200, NULL);
 
-    INSERT INTO staff (uuid, tax_number, name, role, created_at, updated_at, deleted_at)
-    SELECT md5('staff:' || t.n)::uuid,
-           pg_temp.fn_cpf((t.n::bigint * 27644437 + 41297761) % 1000000000),
-           t.name, t.role,
-           t.hired_at::timestamp AT TIME ZONE c_tz,
-           (COALESCE(t.left_at, t.hired_at)::timestamp AT TIME ZONE c_tz) + interval '9 hours',
-           (t.left_at::timestamp AT TIME ZONE c_tz) + interval '9 hours'
-      FROM tmp_staff t
-     ORDER BY t.n;
+-- Herança JOINED: dados comuns em person; o cargo em staff, com o mesmo id
+INSERT INTO person (uuid, tax_number, name, created_at, updated_at, deleted_at)
+SELECT md5('staff:' || t.n)::uuid,
+        pg_temp.fn_cpf((t.n::bigint * 27644437 + 41297761) % 1000000000),
+       t.name,
+       t.hired_at::timestamp AT TIME ZONE c_tz,
+        (COALESCE(t.left_at, t.hired_at)::timestamp AT TIME ZONE c_tz) + interval '9 hours',
+    (t.left_at::timestamp AT TIME ZONE c_tz) + interval '9 hours'
+FROM tmp_staff t
+ORDER BY t.n;
 
-    UPDATE tmp_staff t SET id = x.id FROM staff x WHERE x.uuid = md5('staff:' || t.n)::uuid;
+UPDATE tmp_staff t SET id = p.id FROM person p WHERE p.uuid = md5('staff:' || t.n)::uuid;
+
+INSERT INTO staff (id, role)
+SELECT t.id, t.role
+FROM tmp_staff t
+ORDER BY t.n;
 
     -- ==========================================================================================
     -- 5) Historico de precos (price)
