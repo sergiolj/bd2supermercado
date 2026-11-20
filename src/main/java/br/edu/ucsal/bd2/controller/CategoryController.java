@@ -3,7 +3,6 @@ package br.edu.ucsal.bd2.controller;
 import java.util.UUID;
 
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -21,6 +20,7 @@ import br.edu.ucsal.bd2.dto.response.CategoryResponse;
 import br.edu.ucsal.bd2.dto.response.PageResponse;
 import br.edu.ucsal.bd2.model.Category;
 import br.edu.ucsal.bd2.service.CategoryService;
+import br.edu.ucsal.bd2.util.PageRules;
 
 @RestController
 @RequestMapping("/api/category")
@@ -37,17 +37,7 @@ public class CategoryController {
     public ResponseEntity<PageResponse<CategoryResponse>> findAll(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        if (page < 0) {
-            page = 0;
-        }
-        if (size < 1) {
-            size = 1;
-        }
-        if (size > 100) {
-            size = 100;
-        }
-
-        Page<Category> categoriesPage = service.findAll(PageRequest.of(page, size));
+        Page<Category> categoriesPage = service.findAll(PageRules.of(page, size));
 
         return ResponseEntity.ok(PageResponse.from(categoriesPage, CategoryResponse::convertToDTO));
     }
