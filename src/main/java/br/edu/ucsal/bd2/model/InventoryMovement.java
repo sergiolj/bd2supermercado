@@ -3,8 +3,10 @@ package br.edu.ucsal.bd2.model;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UuidGenerator;
 
 import br.edu.ucsal.bd2.util.MovementType;
 import jakarta.persistence.Column;
@@ -31,6 +33,12 @@ public class InventoryMovement {
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
+
+	// Identificador público (a API nunca expõe o id). O DEFAULT do banco existe para o ddl-auto=update conseguir criar
+	// a coluna numa tabela que já tem linhas (e para o seed, que insere sem uuid): cada linha antiga recebe o seu.
+	@UuidGenerator
+	@Column(nullable = false, unique = true, updatable = false, columnDefinition = "uuid default gen_random_uuid()")
+	private UUID uuid;
 
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "product_id", nullable = false)
