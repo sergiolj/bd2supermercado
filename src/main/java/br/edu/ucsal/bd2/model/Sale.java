@@ -52,6 +52,11 @@ public class Sale {
 	@JoinColumn(name = "store_id", nullable = false)
 	private Store store;
 
+	// Opcional: muita venda é feita sem identificar o cliente
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "customer_id")
+	private Customer customer;
+
 	// Lado inverso: a chave estrangeira continua em sale_items.sale_id
 	@OneToMany(mappedBy = "sale", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<SaleItem> items = new ArrayList<>();

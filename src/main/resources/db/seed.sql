@@ -1,8 +1,8 @@
 -- Seed de dados semi-realistas para o banco "grocery" (PostgreSQL).
 --
 -- Volume gerado:
---    20 categorias | 200 produtos | 100 fornecedores | 3 lojas | 16 funcionarios
---   2.000 vendas (1.997 historicas + 3 em andamento) divididas entre as lojas (cerca de 45% / 33% / 22%),
+--    20 categorias | 200 produtos | 100 fornecedores | 5 lojas | 20 funcionarios | 200 clientes
+--   2.000 vendas (1.997 historicas + 3 em andamento) divididas entre as lojas (cerca de 30/22/18/16/14%),
 --   com itens, pagamentos e baixas de estoque, espalhadas por 26 meses (780 dias) ate ontem; compras de
 --   reposicao, perdas (LOSS) e historico de precos coerentes entre si. Leva alguns segundos.
 --
@@ -716,9 +716,10 @@ BEGIN
      WHERE p.n = pc.n;
 
     -- ==========================================================================================
-    -- 4) Lojas (3) e funcionarios (16)
+    -- 4) Lojas (5) e funcionarios (20)
     --    share e a fatia das vendas da rede que cada loja recebe. Cada loja e cadastrada antes de
     --    contratar o primeiro funcionario; o gerente e definido depois, porque precisa trabalhar nela.
+    --    Cidades e estados diferentes alimentam a dimensao Loja -> Cidade -> Estado do DW.
     -- ==========================================================================================
     CREATE TEMP TABLE tmp_store (
         n          int PRIMARY KEY,
@@ -726,20 +727,25 @@ BEGIN
         street     text NOT NULL,
         number     text NOT NULL,
         district   text NOT NULL,
+        city       text NOT NULL,
+        state      text NOT NULL,
         zip        text NOT NULL,
+        ddd        text NOT NULL,
         share      numeric NOT NULL,
         opened_at  date NOT NULL,
         manager_n  int NOT NULL,
         id         bigint
     ) ON COMMIT DROP;
 
-    INSERT INTO tmp_store (n, name, street, number, district, zip, share, opened_at, manager_n) VALUES
-        (1, 'Mercado Central - Pituba',  'Av. Manoel Dias da Silva', '1200', 'Pituba', '41830000', 0.45, v_start - 820,  2),
-        (2, 'Mercado Central - Barra',   'Av. Sete de Setembro',     '3450', 'Barra',  '40140000', 0.33, v_start - 420,  3),
-        (3, 'Mercado Central - Itapuã',  'Rua da Música',            '85',   'Itapuã', '41610000', 0.22, v_start - 260, 16);
+    INSERT INTO tmp_store (n, name, street, number, district, city, state, zip, ddd, share, opened_at, manager_n) VALUES
+        (1, 'Mercado Central - Pituba',     'Av. Manoel Dias da Silva', '1200', 'Pituba',         'Salvador',         'BA', '41830000', '71', 0.30, v_start - 820,  2),
+        (2, 'Mercado Central - Barra',      'Av. Sete de Setembro',     '3450', 'Barra',          'Salvador',         'BA', '40140000', '71', 0.22, v_start - 420,  3),
+        (3, 'Mercado Central - Feira',      'Av. Getúlio Vargas',       '850',  'Centro',         'Feira de Santana', 'BA', '44001525', '75', 0.18, v_start - 260, 16),
+        (4, 'Mercado Central - Aracaju',    'Av. Beira Mar',            '1500', 'Treze de Julho', 'Aracaju',          'SE', '49020010', '79', 0.16, v_start - 200, 17),
+        (5, 'Mercado Central - Boa Viagem', 'Av. Boa Viagem',           '3100', 'Boa Viagem',     'Recife',           'PE', '51020000', '81', 0.14, v_start - 150, 19);
 
     INSERT INTO store (uuid, name, street, number, district, city, state, zip_code, created_at, updated_at)
-    SELECT md5('store:' || s.n)::uuid, s.name, s.street, s.number, s.district, 'Salvador', 'BA', s.zip,
+    SELECT md5('store:' || s.n)::uuid, s.name, s.street, s.number, s.district, s.city, s.state, s.zip,
            (s.opened_at + time '08:00')::timestamp AT TIME ZONE c_tz,
            (s.opened_at + time '08:00')::timestamp AT TIME ZONE c_tz
       FROM tmp_store s
@@ -774,7 +780,11 @@ BEGIN
         (13, 'Mônica Araújo Batista',      'STOCKIST', 2,    v_start - 350, NULL),
         (14, 'Rafael Mendes Carvalho',     'STOCKIST', 3,    v_start - 100, NULL),
         (15, 'Isabela Correia Andrade',    'STOCKIST', 1,    v_start + 200, NULL),
-        (16, 'Luciana Prado Matos',        'MANAGER',  3,    v_start - 250, NULL);
+        (16, 'Luciana Prado Matos',        'MANAGER',  3,    v_start - 250, NULL),
+        (17, 'Jorge Henrique Vasconcelos', 'MANAGER',  4,    v_start - 190, NULL),
+        (18, 'Aline Batista Fontes',       'CASHIER',  4,    v_start - 180, NULL),
+        (19, 'Ricardo Lins Cavalcanti',    'MANAGER',  5,    v_start - 140, NULL),
+        (20, 'Beatriz Albuquerque Melo',   'CASHIER',  5,    v_start - 130, NULL);
 
 -- Herança JOINED: dados comuns em person; o cargo em staff, com o mesmo id
 INSERT INTO person (uuid, tax_number, name, created_at, updated_at, deleted_at)
@@ -1001,12 +1011,57 @@ ORDER BY t.n;
     -- 9) Planejamento das vendas: status, cliente e cesta de cada uma (independe do estoque).
     --    A reposicao (secao 10) olha essas cestas para comprar so o que vai ser vendido.
     -- ==========================================================================================
-    -- Pool de clientes recorrentes (CPF na nota) e de empresas (CNPJ).
-    CREATE TEMP TABLE tmp_client (n int PRIMARY KEY, doc text NOT NULL) ON COMMIT DROP;
-    INSERT INTO tmp_client
-    SELECT g, pg_temp.fn_cpf((g::bigint * 48271 + 123456789) % 1000000000) FROM generate_series(1, 350) g;
-    INSERT INTO tmp_client
-    SELECT 350 + g, pg_temp.fn_cnpj((g::bigint * 91238177 + 55512345) % 100000000) FROM generate_series(1, 12) g;
+    -- Clientes cadastrados: 200, 40 por loja. O cliente n mora na cidade da loja 1 + (n - 1) % 5 e compra nela.
+    -- Ficam em person + customer (heranca JOINED), como os funcionarios.
+    CREATE TEMP TABLE tmp_client (
+        n        int PRIMARY KEY,
+        store_n  int NOT NULL,
+        doc      text NOT NULL,
+        id       bigint
+    ) ON COMMIT DROP;
+
+    INSERT INTO tmp_client (n, store_n, doc)
+    SELECT g, 1 + (g - 1) % 5, pg_temp.fn_cpf((g::bigint * 48271 + 123456789) % 1000000000)
+      FROM generate_series(1, 200) g;
+
+    -- Nome = primeiro nome (n % 20) + sobrenome (n / 20) + sobrenome (n * 7 % 20): 200 nomes distintos
+    INSERT INTO person (uuid, tax_number, name, email, phone,
+                        street, number, district, city, state, zip_code, created_at, updated_at)
+    SELECT md5('customer:' || c.n)::uuid,
+           c.doc,
+           nm.first_name || ' ' || nm.last1 || ' ' || nm.last2,
+           pg_temp.fn_slug(nm.first_name || nm.last1) || c.n || '@email.com',
+           '(' || s.ddd || ') 9' || lpad(((c.n * 7919) % 10000)::text, 4, '0')
+               || '-' || lpad(((c.n * 104729) % 10000)::text, 4, '0'),
+           (ARRAY['Rua das Flores', 'Rua da Paz', 'Rua São José', 'Avenida Brasil', 'Rua Sete de Setembro',
+                  'Rua Castro Alves', 'Travessa da Alegria', 'Rua do Sol', 'Avenida Principal',
+                  'Rua Rui Barbosa'])[1 + c.n % 10],
+           (10 + (c.n * 37) % 990)::text,
+           (ARRAY['Centro', 'Jardim América', 'Santa Cruz', 'Bela Vista', 'Liberdade', 'Vila Nova',
+                  'São Cristóvão', 'Boa Vista'])[1 + (c.n * 3) % 8],
+           s.city,
+           s.state,
+           left(s.zip, 3) || lpad(((c.n * 389) % 100000)::text, 5, '0'),
+           (v_start - (c.n * 3) % 300 - 1)::timestamp AT TIME ZONE c_tz,
+           (v_start - (c.n * 3) % 300 - 1)::timestamp AT TIME ZONE c_tz
+      FROM tmp_client c
+      JOIN tmp_store s ON s.n = c.store_n
+      CROSS JOIN LATERAL (
+          SELECT (ARRAY['Ana', 'Bruno', 'Camila', 'Diego', 'Eduarda', 'Felipe', 'Gabriela', 'Henrique',
+                        'Isabela', 'João', 'Karina', 'Lucas', 'Mariana', 'Nicolas', 'Olívia', 'Paulo',
+                        'Renata', 'Samuel', 'Tatiane', 'Vinícius'])[1 + c.n % 20] AS first_name,
+                 (ARRAY['Silva', 'Santos', 'Oliveira', 'Souza', 'Lima', 'Pereira', 'Costa', 'Rodrigues',
+                        'Almeida', 'Nascimento', 'Carvalho', 'Araújo', 'Ribeiro', 'Gomes', 'Barbosa',
+                        'Rocha', 'Dias', 'Moreira', 'Cardoso', 'Teixeira'])[1 + (c.n / 20) % 20] AS last1,
+                 (ARRAY['Silva', 'Santos', 'Oliveira', 'Souza', 'Lima', 'Pereira', 'Costa', 'Rodrigues',
+                        'Almeida', 'Nascimento', 'Carvalho', 'Araújo', 'Ribeiro', 'Gomes', 'Barbosa',
+                        'Rocha', 'Dias', 'Moreira', 'Cardoso', 'Teixeira'])[1 + (c.n * 7) % 20] AS last2
+      ) nm
+     ORDER BY c.n;
+
+    UPDATE tmp_client c SET id = p.id FROM person p WHERE p.uuid = md5('customer:' || c.n)::uuid;
+
+    INSERT INTO customer (id) SELECT c.id FROM tmp_client c ORDER BY c.n;
 
     CREATE TEMP TABLE tmp_plan (
         n        int PRIMARY KEY,
@@ -1039,12 +1094,12 @@ ORDER BY t.n;
         -- status: a maioria concluida; algumas canceladas
         v_status := CASE WHEN random() < 0.955 THEN 'COMPLETED' ELSE 'CANCELED' END;
 
-        -- cliente com CPF/CNPJ na nota (~30% das vendas; clientes frequentes repetem)
+        -- cliente cadastrado em ~60% das vendas, sorteado entre os 40 da cidade da loja;
+        -- power(1.7) faz uns comprarem bem mais que outros (clientes frequentes repetem)
         v_client := NULL;
-        IF random() < 0.30 THEN
+        IF random() < 0.60 THEN
             -- sorteia o cliente ANTES da consulta (random() dentro do WHERE seria reavaliado por linha)
-            v_n := CASE WHEN random() < 0.04 THEN 351 + floor(random() * 12)::int
-                        ELSE 1 + floor(power(random(), 1.7) * 350)::int END;
+            v_n := v_store_n + 5 * floor(power(random(), 1.7) * 40)::int;
             SELECT doc INTO v_client FROM tmp_client WHERE n = v_n;
         END IF;
         INSERT INTO tmp_plan (n, ts, store_n, status, client) VALUES (slot.n, slot.ts, v_store_n, v_status, v_client);
@@ -1153,9 +1208,10 @@ ORDER BY t.n;
         END IF;
 
         -- 10.2) Vendas do dia de todas as lojas, em ordem de horario (os ids da rede seguem o tempo)
-        FOR slot IN SELECT pl.n, pl.ts, pl.status, pl.client, pl.store_n, s.id AS store_id
+        FOR slot IN SELECT pl.n, pl.ts, pl.status, pl.client, pl.store_n, s.id AS store_id, c.id AS customer_id
                       FROM tmp_plan pl
                       JOIN tmp_store s ON s.n = pl.store_n
+                      LEFT JOIN tmp_client c ON c.doc = pl.client
                      WHERE pl.ts >= v_day::timestamp AT TIME ZONE c_tz
                        AND pl.ts <  (v_day + 1)::timestamp AT TIME ZONE c_tz
                      ORDER BY pl.ts, pl.n
@@ -1169,9 +1225,10 @@ ORDER BY t.n;
                AND hired_at <= v_day AND (left_at IS NULL OR left_at > v_day);
             v_seller := v_sellers[1 + floor(random() * array_length(v_sellers, 1))::int];
 
-            INSERT INTO sale (uuid, store_id, seller_id, status, total_amount_in_cents, client_tax_number,
+            INSERT INTO sale (uuid, store_id, seller_id, customer_id, status, total_amount_in_cents, client_tax_number,
                               created_at, updated_at)
-            VALUES (md5('sale:' || slot.n)::uuid, slot.store_id, v_seller, v_status, 0, slot.client, slot.ts, slot.ts)
+            VALUES (md5('sale:' || slot.n)::uuid, slot.store_id, v_seller, slot.customer_id, v_status, 0, slot.client,
+                    slot.ts, slot.ts)
             RETURNING id INTO v_sale_id;
 
             v_total := 0;
