@@ -26,7 +26,7 @@
 --     e o trigger mantem inventory em dia (se o seed violasse o CHECK de saldo >= 0, falharia).
 --   * Tudo-ou-nada: o bloco principal roda numa transacao so; se algo falhar, nada fica pela metade.
 --
--- Premissas de negocio (o codigo ainda nao tem regra de venda, entao ficaram explicitas aqui):
+-- Premissas de negocio (as mesmas do SaleService):
 --   * Multi-loja: catalogo (categoria, produto, preco) e fornecedores sao da rede. Cada loja tem os seus
 --     funcionarios (o ADMIN e da rede e fica sem loja), as suas vendas e o seu estoque; reposicao, perdas e
 --     vencimento de lotes sao simulados por (loja, produto). O vendedor de uma venda e caixa da loja dela.
