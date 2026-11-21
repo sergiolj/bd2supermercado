@@ -1,6 +1,7 @@
 package br.edu.ucsal.bd2.model;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -36,7 +37,15 @@ public class SaleItem {
 	@Column(nullable = false, precision = 12, scale = 3)
 	private BigDecimal quantity;
 
+	// Preço vigente do produto quando o item entrou na venda: trocar o preço depois não muda a venda.
 	@Column(nullable = false)
 	private Long unitPriceInCents;
+
+	// Valor da linha: quantidade x preço unitário, arredondado para o centavo (meio para cima), como no seed.
+	public long totalInCents() {
+		return quantity.multiply(BigDecimal.valueOf(unitPriceInCents))
+				.setScale(0, RoundingMode.HALF_UP)
+				.longValueExact();
+	}
 
 }

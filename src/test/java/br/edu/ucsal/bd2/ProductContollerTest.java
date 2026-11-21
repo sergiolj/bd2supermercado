@@ -112,7 +112,7 @@ class ProductContollerTest {
                 .andExpect(status().isConflict())
 
                 .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.error").value(errorMessage))
+                .andExpect(jsonPath("$.error").value("Registro já cadastrado."))
                 .andExpect(jsonPath("$.message").value("Produto já cadastrado."))
                 .andExpect(jsonPath("$.path").value(requestURI))
                 .andExpect(jsonPath("$.timestamp").exists());

@@ -9,6 +9,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.annotations.UuidGenerator;
 
+import br.edu.ucsal.bd2.util.PaymentStatus;
 import br.edu.ucsal.bd2.util.SaleStatus;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
@@ -55,6 +56,11 @@ public class Sale {
 	@OneToMany(mappedBy = "sale", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<SaleItem> items = new ArrayList<>();
 
+	// Lado inverso: a chave estrangeira fica em payment.sale_id. Sem cascade: cada pagamento é gravado quando é
+	// recebido (SaleDAO.savePayment), e nunca é apagado (no máximo estornado).
+	@OneToMany(mappedBy = "sale")
+	private List<Payment> payments = new ArrayList<>();
+
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
 	private SaleStatus status;
@@ -72,6 +78,19 @@ public class Sale {
 	@UpdateTimestamp
 	@Column(nullable = false)
 	private Instant updatedAt;
+
+	// Soma dos pagamentos aceitos (PAID): os recusados e os estornados não contam.
+	public long paidInCents() {
+		return payments.stream()
+				.filter(payment -> payment.getStatus() == PaymentStatus.PAID)
+				.mapToLong(Payment::getAmountInCents)
+				.sum();
+	}
+
+	// O que falta pagar. A venda é concluída quando chega a zero (paga integralmente).
+	public long remainingInCents() {
+		return totalAmountInCents - paidInCents();
+	}
 
 }
 

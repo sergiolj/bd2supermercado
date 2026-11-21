@@ -13,7 +13,8 @@ import br.edu.ucsal.bd2.model.InventoryMovement;
 import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.util.MovementType;
 
-// Movimentações de estoque. Por enquanto só as compras (PURCHASE) são expostas; a venda e a perda entram depois.
+// Movimentações de estoque. As consultas daqui são das compras (PURCHASE); as saídas de venda (SALE) são lançadas pelo
+// SaleService quando a venda é paga integralmente, e a perda (LOSS) entra depois.
 // Toda consulta é de uma loja: a movimentação de outra loja não é achada por aqui.
 // O saldo (inventory) NUNCA é escrito aqui: o trigger do banco o atualiza a cada inserção ou remoção.
 @Repository

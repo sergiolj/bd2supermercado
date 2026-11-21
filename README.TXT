@@ -181,6 +181,20 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
 
+As seções do Swagger seguem a ordem de um teste de ponta a ponta, em que cada passo usa o que os anteriores cadastraram:
+  1. Lojas          o uuid da loja é o header X-Store-Id das operações de loja
+  2. Funcionários   o funcionário trabalha numa loja; depois o PUT da loja define o gerente
+  3. Categorias     o seed já cria as categorias padrão
+  4. Produtos       o produto pertence a uma categoria
+  5. Preços         sem preço vigente o produto não pode ser vendido
+  6. Fornecedores   exigido no lançamento de compra
+  7. Compras        dá entrada no estoque da loja
+  8. Clientes       o CPF pode ir na nota da venda
+  9. Vendas         precisa de vendedor da loja, preço vigente e estoque
+  10. Consultas     relatórios (Criteria API) sobre o que foi lançado
+Dentro de cada seção, o caminho pai vem antes dos filhos (GET /api/store antes de GET /api/store/{storeUuid}).
+A ordem fica em config/OpenApiConfig.java; um controller novo precisa entrar lá (o OpenApiConfigTest acusa se faltar).
+
 Multi-loja (header X-Store-Id)
 A rede tem várias lojas. Cada loja tem os seus funcionários, as suas vendas e o seu estoque; o catálogo (categorias,
 produtos e preços), os fornecedores e os clientes são da rede, compartilhados por todas.
@@ -190,6 +204,8 @@ produtos e preços), os fornecedores e os clientes são da rede, compartilhados 
 As operações de uma loja dizem de qual loja são pelo header X-Store-Id, com o uuid da loja (GET /api/store lista as lojas):
   /api/purchase                          obrigatório: sem ele 400; loja inexistente ou apagada 404.
                                          Uma loja não vê nem apaga as compras de outra (404).
+  /api/sale                              obrigatório, como em /api/purchase. Uma loja não vê, não recebe pagamento
+                                         nem cancela a venda de outra (404).
   GET /api/staff                         opcional: com ele, só os funcionários da loja; sem ele, a rede inteira.
   /api/criteria/sales e revenue-by-category  opcional: com ele, só a loja; sem ele, a rede inteira.
 No Swagger o header aparece como parâmetro da operação. Com curl: -H "X-Store-Id: <uuid da loja>".
@@ -201,6 +217,24 @@ Regras (garantidas no service e também no banco, em db/store_constraints.sql):
     nela e então defina o gerente com PUT /api/store/{uuid}. Para transferir o gerente, troque antes o gerente da loja.
   - Loja com funcionários ativos não pode ser apagada.
   - O vendedor trabalha na loja da venda, e a movimentação de uma venda mexe no estoque da loja da venda.
+
+Vendas (/api/sale, header X-Store-Id)
+Uma venda tem vários itens e passa por três estados: OPEN (em aberto), COMPLETED (concluída) e CANCELED (cancelada).
+  POST /api/sale                      abre a venda (OPEN) com o vendedor e os itens (produto e quantidade). Cada item
+                                      leva o preço vigente do produto e precisa ter saldo no estoque da loja, mas o
+                                      estoque ainda não baixa. Cada produto aparece em um item só.
+  POST /api/sale/{uuid}/payment       registra um pagamento recebido (forma e valor em centavos). Pode pagar em partes
+                                      (ex.: PIX + cartão), sem passar do que falta.
+  POST /api/sale/{uuid}/cancel        cancela uma venda em aberto: os pagamentos são estornados (REFUNDED).
+  GET  /api/sale/{uuid}               a venda com itens, pagamentos, total pago e o que falta pagar.
+A venda só é concluída quando é paga integralmente. O pagamento que quita o total muda a venda para COMPLETED e lança
+uma movimentação de estoque SALE por item, tudo na mesma transação; o trigger do banco baixa o saldo da loja a cada
+uma. Se algum item já não tiver saldo nesse momento (outra venda levou antes), a resposta é 409 e nada é gravado: nem
+o pagamento, nem as baixas, e a venda continua em aberto.
+Concorrência: a venda e as linhas de estoque dos itens são travadas (SELECT ... FOR UPDATE) até o fim da transação, então
+dois pagamentos da mesma venda, ou duas vendas disputando o mesmo saldo, passam um de cada vez. As linhas de estoque
+são travadas sempre em ordem de produto, para duas vendas não ficarem esperando uma pela outra (deadlock).
+Venda concluída não é cancelada nem recebe pagamento (409): devolução não faz parte deste fluxo.
 
 Banco criado antes da loja entrar no modelo: a aplicação para na subida com uma mensagem pedindo para recriar os dados
 (o ddl-auto=update não consegue criar store_id NOT NULL em tabelas que já têm linhas). Rode docker compose down -v,
