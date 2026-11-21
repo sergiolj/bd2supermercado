@@ -151,9 +151,11 @@ Os testes automatizados (./mvnw test) também usam o PostgreSQL configurado no .
 (GrocerystoreApplicationTests) sobe a aplicação inteira e conecta no banco, então o PostgreSQL precisa estar rodando.
 
 Dados de exemplo (seed)
-Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 3 lojas, 16 funcionários e
-2.000 vendas distribuídas em 26 meses entre as lojas, com histórico de preços, pagamentos, compras e perdas de estoque
-coerentes entre si (cada loja com o seu estoque). Leva alguns segundos.
+Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 5 lojas
+(Salvador/BA, Feira de Santana/BA, Aracaju/SE e Recife/PE), 20 funcionários, 200 clientes e
+2.000 vendas distribuídas em 26 meses entre as lojas (cerca de 60% delas ligadas a um cliente),
+com histórico de preços, pagamentos, compras e perdas de estoque coerentes entre si (cada loja
+com o seu estoque).
 
 ./mvnw -Pseed                (PowerShell: .\mvnw -Pseed)
 
@@ -192,6 +194,12 @@ As seções do Swagger seguem a ordem de um teste de ponta a ponta, em que cada 
   8. Clientes       o CPF pode ir na nota da venda
   9. Vendas         precisa de vendedor da loja, preço vigente e estoque
   10. Consultas     relatórios (Criteria API) sobre o que foi lançado
+  
+Fora dessa ordem, a seção jpql-query-controller (/api/jpql) traz as consultas em JPQL:
+    GET /api/jpql/total-by-customer   total gasto por cliente (@NamedQuery, GROUP BY/HAVING, paginado)
+    GET /api/jpql/revenue-by-store    faturamento por loja (@NamedQuery)
+    GET /api/jpql/top-products        produtos acima do preço médio (subconsulta) e mais vendidos por loja
+
 Dentro de cada seção, o caminho pai vem antes dos filhos (GET /api/store antes de GET /api/store/{storeUuid}).
 A ordem fica em config/OpenApiConfig.java; um controller novo precisa entrar lá (o OpenApiConfigTest acusa se faltar).
 
