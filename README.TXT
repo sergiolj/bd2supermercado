@@ -115,10 +115,14 @@ Variáveis de ambiente do sistema com os mesmos nomes também funcionam e têm p
 
 docker compose up -d
 
-Sobe o container grocery-pg (PostgreSQL 17, já com o banco grocery). A API não vai no Docker: suba pelo terminal
-(./mvnw spring-boot:run) ou pela IDE, como em 2B.
+Sobe dois containers: grocery-pg (PostgreSQL 17, já com o banco grocery) e grocery-adminer (o banco no navegador).
+A API não vai no Docker: suba pelo terminal (./mvnw spring-boot:run) ou pela IDE, como em 2B.
 
 Banco (DBeaver, psql): host localhost, porta DB_PORT, banco grocery, usuário e senha do .env
+Adminer: http://localhost:8082/?pgsql=postgres&username=postgres&db=grocery
+  Já vem com sistema, servidor, usuário e banco preenchidos; digite só a senha do .env.
+  A porta é ADMINER_PORT no .env (padrão 8082). Dentro do Adminer o servidor é "postgres", não localhost.
+  No menu lateral, clicar no nome da tabela abre os dados; a estrutura fica na aba "Show structure".
 Swagger (com a API no ar): http://localhost:8080/swagger-ui/index.html
 
 Quando a API termina de subir, ela escreve no log um resumo com a URL do Swagger e a URL de conexão com o banco,
