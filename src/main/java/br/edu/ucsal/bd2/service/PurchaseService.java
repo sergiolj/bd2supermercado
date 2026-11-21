@@ -1,7 +1,5 @@
 package br.edu.ucsal.bd2.service;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -22,8 +20,8 @@ import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.model.Supplier;
 import br.edu.ucsal.bd2.repository.ProductRepository;
 import br.edu.ucsal.bd2.repository.SupplierRepository;
-import br.edu.ucsal.bd2.util.MeasurementType;
 import br.edu.ucsal.bd2.util.MovementType;
+import br.edu.ucsal.bd2.util.QuantityRules;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.AllArgsConstructor;
 
@@ -41,11 +39,7 @@ import lombok.AllArgsConstructor;
 @AllArgsConstructor
 public class PurchaseService {
 
-    // inventory_movement.quantity é numeric(12,3): no máximo 9 dígitos inteiros e 3 casas decimais.
-    private static final int MAX_QUANTITY_SCALE = 3;
-    private static final BigDecimal MAX_QUANTITY = new BigDecimal("999999999.999");
-
-    // Teto para quantidade x custo caber sempre num long (999.999.999,999 x 1.000.000.000 < 9,2 x 10^18).
+    // Teto para quantidade x custo caber sempre num long (QuantityRules.MAX_QUANTITY x 1.000.000.000 < 9,2 x 10^18).
     private static final long MAX_UNIT_COST_IN_CENTS = 1_000_000_000L;
 
     // Mensagem levantada pelo trigger de estoque (db/inventory_trigger.sql) quando a operação deixaria o saldo negativo.
@@ -85,7 +79,7 @@ public class PurchaseService {
         purchase.setStore(store);
         purchase.setProduct(product);
         purchase.setSupplier(supplier);
-        purchase.setQuantity(validateQuantity(product, dto.quantity()));
+        purchase.setQuantity(QuantityRules.validate(product, dto.quantity()));
         purchase.setUnitCostInCents(validateUnitCost(dto.unitCostInCents()));
         purchase.setBatchExpiresAt(validateBatchExpiration(dto.batchExpiresAt()));
 
@@ -116,26 +110,6 @@ public class PurchaseService {
         return dao.findPurchaseByUuid(store, purchaseUuid)
                 .orElseThrow(() -> new EntityNotFoundException(
                         "Compra com uuid: " + purchaseUuid + " não encontrada na loja '" + store.getName() + "'."));
-    }
-
-    private BigDecimal validateQuantity(Product product, BigDecimal quantity) {
-        if (quantity == null || quantity.signum() <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A quantidade deve ser maior que zero.");
-        }
-
-        // stripTrailingZeros: "24.000" e "24" valem o mesmo; só importa se sobra parte fracionária.
-        int scale = quantity.stripTrailingZeros().scale();
-        if (scale > MAX_QUANTITY_SCALE) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A quantidade aceita no máximo 3 casas decimais.");
-        }
-        if (product.getUnitOfMeasure() == MeasurementType.UNIT && scale > 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "O produto '" + product.getName() + "' é comprado por unidade: a quantidade deve ser inteira.");
-        }
-        if (quantity.compareTo(MAX_QUANTITY) > 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A quantidade é grande demais.");
-        }
-        return quantity.setScale(MAX_QUANTITY_SCALE, RoundingMode.UNNECESSARY);
     }
 
     private Long validateUnitCost(Long unitCostInCents) {
