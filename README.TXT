@@ -181,6 +181,20 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
 
+As seções do Swagger seguem a ordem de um teste de ponta a ponta, em que cada passo usa o que os anteriores cadastraram:
+  1. Lojas          o uuid da loja é o header X-Store-Id das operações de loja
+  2. Funcionários   o funcionário trabalha numa loja; depois o PUT da loja define o gerente
+  3. Categorias     o seed já cria as categorias padrão
+  4. Produtos       o produto pertence a uma categoria
+  5. Preços         sem preço vigente o produto não pode ser vendido
+  6. Fornecedores   exigido no lançamento de compra
+  7. Compras        dá entrada no estoque da loja
+  8. Clientes       o CPF pode ir na nota da venda
+  9. Vendas         precisa de vendedor da loja, preço vigente e estoque
+  10. Consultas     relatórios (Criteria API) sobre o que foi lançado
+Dentro de cada seção, o caminho pai vem antes dos filhos (GET /api/store antes de GET /api/store/{storeUuid}).
+A ordem fica em config/OpenApiConfig.java; um controller novo precisa entrar lá (o OpenApiConfigTest acusa se faltar).
+
 Multi-loja (header X-Store-Id)
 A rede tem várias lojas. Cada loja tem os seus funcionários, as suas vendas e o seu estoque; o catálogo (categorias,
 produtos e preços), os fornecedores e os clientes são da rede, compartilhados por todas.
