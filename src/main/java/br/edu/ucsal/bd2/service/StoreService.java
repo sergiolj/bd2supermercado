@@ -5,8 +5,10 @@ import java.util.UUID;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import br.edu.ucsal.bd2.dao.StaffDAO;
 import br.edu.ucsal.bd2.dao.StoreDAO;
@@ -19,8 +21,8 @@ import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.AllArgsConstructor;
 
-// CRUD de loja: uuid na API, soft delete e listagem paginada. O gerente é um Staff ativo e cada funcionário
-// gerencia no máximo uma loja.
+// CRUD de loja: uuid na API, soft delete e listagem paginada. O gerente é um funcionário ativo da própria loja
+// (o banco garante com uma FK composta), então cada funcionário gerencia no máximo uma loja.
 @Service
 @AllArgsConstructor
 public class StoreService {
@@ -32,12 +34,13 @@ public class StoreService {
         return dao.findActive(pageable);
     }
 
-    // Loja apagada (deletedAt preenchido) é tratada como inexistente.
+    // Loja apagada (deletedAt preenchido) é tratada como inexistente. Também resolve o header X-Store-Id nos outros services.
     public Store findByUuid(UUID storeUuid) {
         return dao.findActiveByUuid(storeUuid)
                 .orElseThrow(() -> new EntityNotFoundException("Loja com uuid: " + storeUuid + " não encontrada."));
     }
 
+    // A loja nasce sem gerente: o gerente precisa trabalhar nela, e uma loja nova ainda não tem funcionários.
     @Transactional
     public Store createStore(StoreRequest dto) {
         String name = TextRules.required(dto.name(), "Nome da loja");
@@ -45,14 +48,14 @@ public class StoreService {
         if (dao.existsByName(name)) {
             throw new EntityExistsException("Já existe uma loja com esse nome.");
         }
-
-        Staff manager = findManager(dto.managerUuid());
-        if (manager != null && dao.existsByManager(manager)) {
-            throw new EntityExistsException("Esse funcionário já gerencia outra loja.");
+        if (dto.managerUuid() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Uma loja nova ainda não tem funcionários, então não pode ser criada com gerente. Cadastre a loja, "
+                            + "depois o funcionário nela e então defina o gerente atualizando a loja.");
         }
 
         Store store = new Store();
-        fillData(store, name, manager, dto);
+        fillData(store, name, null, dto);
         dao.save(store);
         return store;
     }
@@ -67,20 +70,27 @@ public class StoreService {
         }
 
         Staff manager = findManager(dto.managerUuid());
-        if (manager != null && dao.existsByManagerInAnotherStore(manager, storeUuid)) {
-            throw new EntityExistsException("Esse funcionário já gerencia outra loja.");
+        if (manager != null && !worksAt(manager, store)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O funcionário '" + manager.getName() + "' não trabalha nessa loja: o gerente precisa ser funcionário da própria loja.");
         }
 
         fillData(store, name, manager, dto);
         return dao.update(store);
     }
 
-    // Soft delete: a loja continua no banco. O gerente é solto, para ele poder gerenciar outra loja e poder ser apagado.
+    // Soft delete: a loja continua no banco com o histórico (vendas, estoque). Enquanto tiver funcionários ativos ela não
+    // pode sumir, senão eles ficariam lotados numa loja inexistente; isso inclui o gerente, que é funcionário dela.
     @Transactional
     public void deleteStore(UUID storeUuid) {
         Store store = findByUuid(storeUuid);
 
-        store.setManager(null);
+        long activeStaff = staffDao.countActiveByStore(store);
+        if (activeStaff > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A loja tem " + activeStaff + " funcionário(s) ativo(s). Transfira-os para outra loja ou apague-os antes.");
+        }
+
         store.setDeletedAt(Instant.now());
         dao.update(store);
     }
@@ -92,6 +102,10 @@ public class StoreService {
         }
         return staffDao.findActiveByUuid(managerUuid)
                 .orElseThrow(() -> new EntityNotFoundException("Funcionário com uuid: " + managerUuid + " não encontrado."));
+    }
+
+    private static boolean worksAt(Staff staff, Store store) {
+        return staff.getStore() != null && staff.getStore().getUuid().equals(store.getUuid());
     }
 
     private void fillData(Store store, String name, Staff manager, StoreRequest dto) {

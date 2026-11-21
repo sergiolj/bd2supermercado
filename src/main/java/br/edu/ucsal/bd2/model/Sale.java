@@ -45,6 +45,12 @@ public class Sale {
 	@JoinColumn(name = "seller_id", nullable = false)
 	private Staff seller;
 
+	// A loja fica na própria venda em vez de vir do vendedor: se ele for transferido, a venda antiga continua na loja
+	// onde aconteceu. Pagamentos e itens não repetem a coluna: chegam à loja pela venda.
+	@ManyToOne(fetch = FetchType.LAZY, optional = false)
+	@JoinColumn(name = "store_id", nullable = false)
+	private Store store;
+
 	// Lado inverso: a chave estrangeira continua em sale_items.sale_id
 	@OneToMany(mappedBy = "sale", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<SaleItem> items = new ArrayList<>();

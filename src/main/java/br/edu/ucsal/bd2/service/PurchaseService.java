@@ -18,6 +18,7 @@ import br.edu.ucsal.bd2.dao.InventoryMovementDAO;
 import br.edu.ucsal.bd2.dto.request.PurchaseRequest;
 import br.edu.ucsal.bd2.model.InventoryMovement;
 import br.edu.ucsal.bd2.model.Product;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.model.Supplier;
 import br.edu.ucsal.bd2.repository.ProductRepository;
 import br.edu.ucsal.bd2.repository.SupplierRepository;
@@ -28,6 +29,9 @@ import lombok.AllArgsConstructor;
 
 /**
  * Lançamentos de compra (reposição de estoque): InventoryMovement do tipo PURCHASE.
+ *
+ * Cada compra é de uma loja (header X-Store-Id) e só entra no estoque dela. Uma loja não enxerga nem apaga as compras
+ * de outra: para ela, o uuid de outra loja não existe (404).
  *
  * O estoque (inventory) não é escrito aqui: o trigger do banco soma a quantidade ao registrar a compra e a desfaz
  * ao apagá-la (e recusa se o saldo ficaria negativo). A movimentação é imutável no banco (UPDATE é proibido), então
@@ -50,18 +54,20 @@ public class PurchaseService {
     private final InventoryMovementDAO dao;
     private final ProductRepository productRepository;
     private final SupplierRepository supplierRepository;
+    private final StoreService storeService;
 
-    public Page<InventoryMovement> findAll(Pageable pageable) {
-        return dao.findPurchases(pageable);
+    public Page<InventoryMovement> findAll(UUID storeUuid, Pageable pageable) {
+        return dao.findPurchases(storeService.findByUuid(storeUuid), pageable);
     }
 
-    public InventoryMovement findByUuid(UUID purchaseUuid) {
-        return dao.findPurchaseByUuid(purchaseUuid)
-                .orElseThrow(() -> new EntityNotFoundException("Compra com uuid: " + purchaseUuid + " não encontrada."));
+    public InventoryMovement findByUuid(UUID storeUuid, UUID purchaseUuid) {
+        return findInStore(storeService.findByUuid(storeUuid), purchaseUuid);
     }
 
     @Transactional
-    public InventoryMovement registerPurchase(PurchaseRequest dto) {
+    public InventoryMovement registerPurchase(UUID storeUuid, PurchaseRequest dto) {
+        Store store = storeService.findByUuid(storeUuid);
+
         if (dto.productUuid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Produto é obrigatório.");
         }
@@ -76,6 +82,7 @@ public class PurchaseService {
 
         InventoryMovement purchase = new InventoryMovement();
         purchase.setType(MovementType.PURCHASE);
+        purchase.setStore(store);
         purchase.setProduct(product);
         purchase.setSupplier(supplier);
         purchase.setQuantity(validateQuantity(product, dto.quantity()));
@@ -89,8 +96,8 @@ public class PurchaseService {
     // Hard delete: é um lançamento feito por engano. O trigger tira a quantidade do estoque; se parte dela já foi
     // vendida ou perdida, o saldo ficaria negativo e a exclusão é recusada.
     @Transactional
-    public void deletePurchase(UUID purchaseUuid) {
-        InventoryMovement purchase = findByUuid(purchaseUuid);
+    public void deletePurchase(UUID storeUuid, UUID purchaseUuid) {
+        InventoryMovement purchase = findInStore(storeService.findByUuid(storeUuid), purchaseUuid);
 
         try {
             dao.removeAndFlush(purchase);
@@ -103,6 +110,12 @@ public class PurchaseService {
             }
             throw e;
         }
+    }
+
+    private InventoryMovement findInStore(Store store, UUID purchaseUuid) {
+        return dao.findPurchaseByUuid(store, purchaseUuid)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "Compra com uuid: " + purchaseUuid + " não encontrada na loja '" + store.getName() + "'."));
     }
 
     private BigDecimal validateQuantity(Product product, BigDecimal quantity) {

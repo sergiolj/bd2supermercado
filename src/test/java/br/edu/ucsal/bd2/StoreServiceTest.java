@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
@@ -25,6 +26,7 @@ import br.edu.ucsal.bd2.dto.request.StoreRequest;
 import br.edu.ucsal.bd2.model.Staff;
 import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.service.StoreService;
+import br.edu.ucsal.bd2.util.StaffRole;
 import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityNotFoundException;
 
@@ -39,10 +41,13 @@ class StoreServiceTest {
         return new StoreRequest(name, managerUuid, "Av. Manoel Dias", "1200", "Pituba", "Salvador", "ba", "41830-000");
     }
 
-    private Staff manager() {
+    // Funcionário ativo que trabalha em `workplace` (nulo = ADMIN, que é da rede).
+    private Staff staffOf(Store workplace) {
         Staff staff = new Staff();
         staff.setUuid(UUID.randomUUID());
         staff.setName("Marina");
+        staff.setRole(workplace == null ? StaffRole.ADMIN : StaffRole.MANAGER);
+        staff.setStore(workplace);
         when(staffDao.findActiveByUuid(staff.getUuid())).thenReturn(Optional.of(staff));
         return staff;
     }
@@ -58,26 +63,35 @@ class StoreServiceTest {
     }
 
     @Test
-    @DisplayName("Deve criar a loja com gerente, nome sem espaços extras e endereço normalizado")
-    void shouldCreateStoreWithManager() {
-        Staff manager = manager();
-
-        Store result = service.createStore(request("  Mercado Central  ", manager.getUuid()));
+    @DisplayName("Deve criar a loja sem gerente, com nome sem espaços extras e endereço normalizado")
+    void shouldCreateStore() {
+        Store result = service.createStore(request("  Mercado Central  ", null));
 
         assertEquals("Mercado Central", result.getName());
-        assertSame(manager, result.getManager());
+        assertNull(result.getManager());
         assertEquals("BA", result.getAddress().getState());
         assertEquals("41830000", result.getAddress().getZipCode());
         verify(dao).save(result);
     }
 
     @Test
-    @DisplayName("Deve criar a loja sem gerente e sem endereço")
-    void shouldCreateStoreWithoutManager() {
+    @DisplayName("Deve criar a loja sem endereço")
+    void shouldCreateStoreWithoutAddress() {
         Store result = service.createStore(new StoreRequest("Mercado Central", null, null, null, null, null, null, null));
 
         assertNull(result.getManager());
         verify(dao).save(result);
+    }
+
+    @Test
+    @DisplayName("Loja nova não pode ter gerente (400): ainda não há funcionário trabalhando nela")
+    void shouldRejectManagerOnCreate() {
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.createStore(request("Loja Nova", UUID.randomUUID())));
+
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+        verify(dao, never()).save(any());
+        verifyNoInteractions(staffDao);
     }
 
     @Test
@@ -97,35 +111,39 @@ class StoreServiceTest {
     @Test
     @DisplayName("Deve retornar 404 quando o gerente não existe ou foi apagado")
     void shouldRejectUnknownManager() {
+        UUID storeUuid = UUID.randomUUID();
+        existing(storeUuid, null);
         UUID unknown = UUID.randomUUID();
         when(staffDao.findActiveByUuid(unknown)).thenReturn(Optional.empty());
 
-        assertThrows(EntityNotFoundException.class, () -> service.createStore(request("Loja", unknown)));
+        assertThrows(EntityNotFoundException.class, () -> service.updateStore(storeUuid, request("Loja Antiga", unknown)));
 
-        verify(dao, never()).save(any());
+        verify(dao, never()).update(any());
     }
 
     @Test
-    @DisplayName("Não deve criar nem atualizar loja com um gerente que já gerencia outra loja")
-    void shouldRejectManagerOfAnotherStore() {
-        Staff manager = manager();
-        when(dao.existsByManager(manager)).thenReturn(true);
-
-        assertThrows(EntityExistsException.class, () -> service.createStore(request("Loja Nova", manager.getUuid())));
-        verify(dao, never()).save(any());
-
+    @DisplayName("O gerente precisa trabalhar na loja: funcionário de outra loja ou ADMIN (sem loja) é 409")
+    void shouldRejectManagerFromOutsideTheStore() {
         UUID storeUuid = UUID.randomUUID();
-        existing(storeUuid, null);
-        when(dao.existsByManagerInAnotherStore(manager, storeUuid)).thenReturn(true);
-        assertThrows(EntityExistsException.class, () -> service.updateStore(storeUuid, request("Loja Antiga", manager.getUuid())));
+        Store store = existing(storeUuid, null);
+        Store other = new Store();
+        other.setUuid(UUID.randomUUID());
+
+        for (Staff outsider : new Staff[] {staffOf(other), staffOf(null)}) {
+            ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                    () -> service.updateStore(storeUuid, request("Loja Antiga", outsider.getUuid())));
+            assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        }
+        assertNull(store.getManager());
+        verify(dao, never()).update(any());
     }
 
     @Test
-    @DisplayName("Deve atualizar a loja, trocar o gerente e permitir tirá-lo")
+    @DisplayName("Deve atualizar a loja, definir como gerente um funcionário dela e permitir tirá-lo")
     void shouldUpdateStore() {
         UUID storeUuid = UUID.randomUUID();
         Store store = existing(storeUuid, null);
-        Staff manager = manager();
+        Staff manager = staffOf(store);
 
         service.updateStore(storeUuid, request("Loja Renomeada", manager.getUuid()));
         assertEquals("Loja Renomeada", store.getName());
@@ -146,16 +164,30 @@ class StoreServiceTest {
     }
 
     @Test
-    @DisplayName("Deve apagar de forma lógica e soltar o gerente")
-    void shouldSoftDeleteAndReleaseManager() {
+    @DisplayName("Deve apagar de forma lógica a loja sem funcionários ativos")
+    void shouldSoftDelete() {
         UUID storeUuid = UUID.randomUUID();
-        Store store = existing(storeUuid, manager());
+        Store store = existing(storeUuid, null);
+        when(staffDao.countActiveByStore(store)).thenReturn(0L);
 
         service.deleteStore(storeUuid);
 
         assertNotNull(store.getDeletedAt());
-        assertNull(store.getManager());
         verify(dao).update(store);
+    }
+
+    @Test
+    @DisplayName("Não deve apagar a loja que ainda tem funcionários ativos (409)")
+    void shouldNotDeleteStoreWithActiveStaff() {
+        UUID storeUuid = UUID.randomUUID();
+        Store store = existing(storeUuid, null);
+        when(staffDao.countActiveByStore(store)).thenReturn(3L);
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.deleteStore(storeUuid));
+
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        assertNull(store.getDeletedAt());
+        verify(dao, never()).update(any());
     }
 
     @Test

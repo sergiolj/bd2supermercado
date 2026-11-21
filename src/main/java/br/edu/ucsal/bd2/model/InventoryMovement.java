@@ -40,6 +40,12 @@ public class InventoryMovement {
 	@Column(nullable = false, unique = true, updatable = false, columnDefinition = "uuid default gen_random_uuid()")
 	private UUID uuid;
 
+	// Loja cujo estoque a movimentação altera. Fica aqui (e não só na venda) porque compra e perda não têm venda.
+	// Numa movimentação de venda, o banco garante que a loja é a mesma da venda (db/store_constraints.sql).
+	@ManyToOne(fetch = FetchType.LAZY, optional = false)
+	@JoinColumn(name = "store_id", nullable = false)
+	private Store store;
+
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "product_id", nullable = false)
 	private Product product;

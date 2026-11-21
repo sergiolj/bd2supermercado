@@ -9,7 +9,6 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
-import br.edu.ucsal.bd2.model.Staff;
 import br.edu.ucsal.bd2.model.Store;
 
 @Repository
@@ -60,24 +59,6 @@ public class StoreDAO extends GenericDAO<Store, Long> {
         Long total = em.createQuery(
                         "SELECT COUNT(s) FROM Store s WHERE s.name = :name AND s.uuid <> :uuid", Long.class)
                 .setParameter("name", name)
-                .setParameter("uuid", uuid)
-                .getSingleResult();
-        return total > 0;
-    }
-
-    // Um funcionário gerencia no máximo uma loja (store.manager_id é único).
-    public boolean existsByManager(Staff manager) {
-        Long total = em.createQuery(
-                        "SELECT COUNT(s) FROM Store s WHERE s.manager = :manager", Long.class)
-                .setParameter("manager", manager)
-                .getSingleResult();
-        return total > 0;
-    }
-
-    public boolean existsByManagerInAnotherStore(Staff manager, UUID uuid) {
-        Long total = em.createQuery(
-                        "SELECT COUNT(s) FROM Store s WHERE s.manager = :manager AND s.uuid <> :uuid", Long.class)
-                .setParameter("manager", manager)
                 .setParameter("uuid", uuid)
                 .getSingleResult();
         return total > 0;

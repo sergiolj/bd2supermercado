@@ -4,14 +4,18 @@ import java.util.UUID;
 
 import br.edu.ucsal.bd2.model.Address;
 import br.edu.ucsal.bd2.model.Staff;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.util.StaffRole;
 
-// O id interno do banco nunca sai pela API: o funcionário é identificado pelo uuid.
+// O id interno do banco nunca sai pela API: o funcionário e a loja são identificados pelo uuid.
+// storeUuid e storeName são nulos só para o ADMIN, que é da rede.
 public record StaffResponse(
         UUID uuid,
         String taxNumber,
         String name,
         StaffRole role,
+        UUID storeUuid,
+        String storeName,
         String email,
         String phone,
         String street,
@@ -28,12 +32,15 @@ public record StaffResponse(
         if (address == null) {
             address = new Address();
         }
+        Store store = staff.getStore();
 
         return new StaffResponse(
                 staff.getUuid(),
                 staff.getTaxNumber(),
                 staff.getName(),
                 staff.getRole(),
+                store == null ? null : store.getUuid(),
+                store == null ? null : store.getName(),
                 staff.getEmail(),
                 staff.getPhone(),
                 address.getStreet(),

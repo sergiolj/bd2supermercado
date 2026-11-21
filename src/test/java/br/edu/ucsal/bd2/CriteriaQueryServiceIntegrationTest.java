@@ -30,6 +30,7 @@ import br.edu.ucsal.bd2.model.Product;
 import br.edu.ucsal.bd2.model.Sale;
 import br.edu.ucsal.bd2.model.SaleItem;
 import br.edu.ucsal.bd2.model.Staff;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.service.CriteriaQueryService;
 import br.edu.ucsal.bd2.util.MeasurementType;
 import br.edu.ucsal.bd2.util.SaleStatus;
@@ -53,6 +54,7 @@ class CriteriaQueryServiceIntegrationTest {
 	private final LocalDate today = LocalDate.now(CriteriaQueryService.STORE_ZONE);
 
 	private Category category;
+	private Store store;
 	private Staff seller;
 	private Product rice;
 	private Product beans;
@@ -63,10 +65,16 @@ class CriteriaQueryServiceIntegrationTest {
 		category.setName(tag + " Mercearia");
 		em.persist(category);
 
+		// O vendedor trabalha na loja das vendas (o banco confere).
+		store = new Store();
+		store.setName(tag + " Loja");
+		em.persist(store);
+
 		seller = new Staff();
 		seller.setName(tag + " Vendedor");
-		seller.setTaxNumber(tag);
+		seller.setTaxNumber(String.format("%011d", Math.floorMod((long) tag.hashCode(), 100_000_000_000L)));
 		seller.setRole(StaffRole.CASHIER);
+		seller.setStore(store);
 		em.persist(seller);
 
 		rice = product(tag + " Arroz 5kg", "1" + tag, MeasurementType.UNIT, 2899L);
@@ -188,6 +196,7 @@ class CriteriaQueryServiceIntegrationTest {
 
 	private void sale(SaleStatus status, SaleItem... items) {
 		Sale sale = new Sale();
+		sale.setStore(store);
 		sale.setSeller(seller);
 		sale.setStatus(status);
 		long total = 0;
