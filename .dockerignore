@@ -1,0 +1,9 @@
+# Arquivos que não entram no build da imagem da API.
+# O .env tem a senha do banco: ele nunca deve ir para dentro da imagem.
+.env
+.git
+target
+.idea
+.vscode
+*.iml
+*.log

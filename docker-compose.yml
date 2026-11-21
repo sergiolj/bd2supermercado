@@ -1,0 +1,70 @@
+# Banco (PostgreSQL) e Adminer (o banco no navegador) em containers, opcional: quem tem PostgreSQL instalado
+# pode rodar sem Docker. A API roda na sua máquina, pelo terminal (./mvnw spring-boot:run) ou pela IDE.
+#
+#   docker compose up -d              sobe o banco e o Adminer em segundo plano
+#   docker compose up -d postgres     sobe só o banco
+#   docker compose logs -f postgres   acompanha o log do banco
+#   docker compose stop               para tudo, mantendo os dados
+#   docker compose down -v            remove os containers E APAGA os dados
+#
+# Adminer: http://localhost:8082/?pgsql=postgres&username=postgres&db=grocery (a senha é a do .env).
+# Usuário, senha e portas vêm do mesmo .env usado pela aplicação (veja .env.example).
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: grocery-pg
+    environment:
+      POSTGRES_DB: grocery
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no arquivo .env (copie o .env.example)}
+    ports:
+      # Só aceita conexões da própria máquina. Troque DB_PORT no .env se a 5432 já estiver em uso.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d grocery"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  adminer:
+    image: adminer:5
+    container_name: grocery-adminer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Escreve o link no log ao subir (aparece no "docker compose up"; com -d: docker compose logs adminer) e em seguida
+    # inicia o servidor, igual ao comando padrão da imagem. O "$$" evita que o compose troque a variável antes do shell.
+    command:
+      - sh
+      - -c
+      - |
+        echo ""
+        echo "Adminer (banco no navegador): $$ADMINER_URL"
+        echo "Senha: a DB_PASSWORD do .env"
+        echo ""
+        exec php -S '[::]:8080' -t /var/www/html
+    environment:
+      # Dentro da rede do compose o banco é o serviço "postgres", na porta interna 5432 (não a DB_PORT).
+      ADMINER_DEFAULT_SERVER: postgres
+      # Link visto da sua máquina, mostrado no log ao subir. Já abre com sistema, servidor, usuário e banco preenchidos.
+      ADMINER_URL: http://localhost:${ADMINER_PORT:-8082}/?pgsql=postgres&username=${DB_USERNAME:-postgres}&db=grocery
+    configs:
+      # Plugin que já vem na imagem: o nome da tabela no menu lateral abre os dados (select) em vez da estrutura.
+      - source: adminer_menu_links
+        target: /var/www/html/plugins-enabled/001-menu-links.php
+    ports:
+      # Só aceita conexões da própria máquina. Troque ADMINER_PORT no .env se a 8082 já estiver em uso.
+      - "127.0.0.1:${ADMINER_PORT:-8082}:8080"
+
+configs:
+  adminer_menu_links:
+    content: |
+      <?php
+      require_once('plugins/menu-links.php');
+
+      return new AdminerMenuLinks('select');
+
+volumes:
+  pgdata:
