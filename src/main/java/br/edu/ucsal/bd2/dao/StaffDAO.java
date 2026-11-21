@@ -10,6 +10,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 import br.edu.ucsal.bd2.model.Staff;
+import br.edu.ucsal.bd2.model.Store;
+import jakarta.persistence.TypedQuery;
 
 @Repository
 public class StaffDAO extends GenericDAO<Staff, Long> {
@@ -18,24 +20,43 @@ public class StaffDAO extends GenericDAO<Staff, Long> {
         super(Staff.class);
     }
 
-    // O id no fim da ordenação mantém a ordem estável entre páginas quando há nomes repetidos.
+    // Toda a rede, inclusive o ADMIN (que não tem loja).
     public Page<Staff> findActive(Pageable pageable) {
-        List<Staff> content = em.createQuery(
-                        "SELECT s FROM Staff s WHERE s.deletedAt IS NULL ORDER BY s.name, s.id", Staff.class)
+        return findActivePage(null, pageable);
+    }
+
+    // Só quem trabalha na loja.
+    public Page<Staff> findActiveByStore(Store store, Pageable pageable) {
+        return findActivePage(store, pageable);
+    }
+
+    // A loja vem no mesmo SELECT (LEFT JOIN FETCH; LEFT porque o ADMIN não tem loja): senão cada funcionário da página
+    // dispararia uma consulta extra para carregá-la. O id no fim da ordenação mantém a ordem estável entre páginas
+    // quando há nomes repetidos.
+    private Page<Staff> findActivePage(Store store, Pageable pageable) {
+        String storeFilter = store == null ? "" : " AND s.store = :store";
+
+        TypedQuery<Staff> query = em.createQuery(
+                "SELECT s FROM Staff s LEFT JOIN FETCH s.store WHERE s.deletedAt IS NULL" + storeFilter
+                        + " ORDER BY s.name, s.id", Staff.class);
+        TypedQuery<Long> count = em.createQuery(
+                "SELECT COUNT(s) FROM Staff s WHERE s.deletedAt IS NULL" + storeFilter, Long.class);
+        if (store != null) {
+            query.setParameter("store", store);
+            count.setParameter("store", store);
+        }
+
+        List<Staff> content = query
                 .setFirstResult((int) pageable.getOffset())
                 .setMaxResults(pageable.getPageSize())
                 .getResultList();
 
-        Long total = em.createQuery(
-                        "SELECT COUNT(s) FROM Staff s WHERE s.deletedAt IS NULL", Long.class)
-                .getSingleResult();
-
-        return new PageImpl<>(content, pageable, total);
+        return new PageImpl<>(content, pageable, count.getSingleResult());
     }
 
     public Optional<Staff> findActiveByUuid(UUID uuid) {
         List<Staff> result = em.createQuery(
-                        "SELECT s FROM Staff s WHERE s.uuid = :uuid AND s.deletedAt IS NULL", Staff.class)
+                        "SELECT s FROM Staff s LEFT JOIN FETCH s.store WHERE s.uuid = :uuid AND s.deletedAt IS NULL", Staff.class)
                 .setParameter("uuid", uuid)
                 .getResultList();
 
@@ -70,5 +91,25 @@ public class StaffDAO extends GenericDAO<Staff, Long> {
                 .setParameter("staff", staff)
                 .getSingleResult();
         return total > 0;
+    }
+
+    // A loja que este funcionário gerencia, se houver (store.manager_id é único: no máximo uma).
+    public Optional<Store> findManagedStore(Staff staff) {
+        List<Store> result = em.createQuery(
+                        "SELECT st FROM Store st WHERE st.manager = :staff", Store.class)
+                .setParameter("staff", staff)
+                .getResultList();
+
+        if (result.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(result.get(0));
+    }
+
+    public long countActiveByStore(Store store) {
+        return em.createQuery(
+                        "SELECT COUNT(s) FROM Staff s WHERE s.store = :store AND s.deletedAt IS NULL", Long.class)
+                .setParameter("store", store)
+                .getSingleResult();
     }
 }

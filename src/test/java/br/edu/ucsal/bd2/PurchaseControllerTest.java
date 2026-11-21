@@ -1,7 +1,9 @@
 package br.edu.ucsal.bd2;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -33,6 +35,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import br.edu.ucsal.bd2.controller.PurchaseController;
+import br.edu.ucsal.bd2.controller.StoreHeader;
 import br.edu.ucsal.bd2.dto.request.PurchaseRequest;
 import br.edu.ucsal.bd2.model.InventoryMovement;
 import br.edu.ucsal.bd2.model.Product;
@@ -53,6 +56,7 @@ class PurchaseControllerTest {
     @MockitoBean
     private PurchaseService service;
 
+    private final UUID storeUuid = UUID.randomUUID();
     private final UUID productUuid = UUID.randomUUID();
     private final UUID supplierUuid = UUID.randomUUID();
 
@@ -89,9 +93,9 @@ class PurchaseControllerTest {
     @DisplayName("Deve lançar a compra e responder 201 com o total (quantidade x custo, arredondado) e sem ids internos")
     void shouldRegisterPurchase() throws Exception {
         InventoryMovement purchase = newPurchase();
-        when(service.registerPurchase(any(PurchaseRequest.class))).thenReturn(purchase);
+        when(service.registerPurchase(eq(storeUuid), any(PurchaseRequest.class))).thenReturn(purchase);
 
-        mockMvc.perform(post("/api/purchase").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+        mockMvc.perform(post("/api/purchase").header(StoreHeader.NAME, storeUuid).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.uuid").value(purchase.getUuid().toString()))
                 .andExpect(jsonPath("$.productName").value("Arroz 5kg"))
@@ -101,19 +105,19 @@ class PurchaseControllerTest {
                 .andExpect(jsonPath("$.batchExpiresAt").value("2027-03-31"))
                 .andExpect(jsonPath("$.id").doesNotExist());
 
-        verify(service).registerPurchase(request());
+        verify(service).registerPurchase(storeUuid, request());
     }
 
     @Test
     @DisplayName("Deve responder 400 para dados inválidos e 404 para produto ou fornecedor inexistente")
     void shouldReturnBadRequestAndNotFound() throws Exception {
-        when(service.registerPurchase(any(PurchaseRequest.class)))
+        when(service.registerPurchase(eq(storeUuid), any(PurchaseRequest.class)))
                 .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "A quantidade deve ser maior que zero."))
                 .thenThrow(new EntityNotFoundException("Fornecedor com uuid: " + supplierUuid + " não encontrado."));
 
-        mockMvc.perform(post("/api/purchase").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+        mockMvc.perform(post("/api/purchase").header(StoreHeader.NAME, storeUuid).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/purchase").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+        mockMvc.perform(post("/api/purchase").header(StoreHeader.NAME, storeUuid).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isNotFound());
     }
 
@@ -121,16 +125,16 @@ class PurchaseControllerTest {
     @DisplayName("Deve listar com paginação (padrão 0/20) e buscar por uuid")
     void shouldListAndFind() throws Exception {
         InventoryMovement purchase = newPurchase();
-        when(service.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(purchase), PageRequest.of(0, 20), 1));
-        when(service.findByUuid(purchase.getUuid())).thenReturn(purchase);
+        when(service.findAll(eq(storeUuid), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(purchase), PageRequest.of(0, 20), 1));
+        when(service.findByUuid(storeUuid, purchase.getUuid())).thenReturn(purchase);
 
-        mockMvc.perform(get("/api/purchase"))
+        mockMvc.perform(get("/api/purchase").header(StoreHeader.NAME, storeUuid))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].unitCostInCents").value(899))
                 .andExpect(jsonPath("$.totalElements").value(1));
-        verify(service).findAll(PageRequest.of(0, 20));
+        verify(service).findAll(storeUuid, PageRequest.of(0, 20));
 
-        mockMvc.perform(get("/api/purchase/" + purchase.getUuid()))
+        mockMvc.perform(get("/api/purchase/" + purchase.getUuid()).header(StoreHeader.NAME, storeUuid))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.productUuid").value(productUuid.toString()));
     }
@@ -141,19 +145,42 @@ class PurchaseControllerTest {
         UUID ok = UUID.randomUUID();
         UUID missing = UUID.randomUUID();
         UUID consumed = UUID.randomUUID();
-        doThrow(new EntityNotFoundException("Compra não encontrada.")).when(service).deletePurchase(missing);
-        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "parte da quantidade já saiu do estoque")).when(service).deletePurchase(consumed);
+        doThrow(new EntityNotFoundException("Compra não encontrada.")).when(service).deletePurchase(storeUuid, missing);
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "parte da quantidade já saiu do estoque")).when(service).deletePurchase(storeUuid, consumed);
 
-        mockMvc.perform(delete("/api/purchase/" + ok)).andExpect(status().isNoContent());
-        verify(service).deletePurchase(ok);
-        mockMvc.perform(delete("/api/purchase/" + missing)).andExpect(status().isNotFound());
-        mockMvc.perform(delete("/api/purchase/" + consumed)).andExpect(status().isConflict());
+        mockMvc.perform(delete("/api/purchase/" + ok).header(StoreHeader.NAME, storeUuid)).andExpect(status().isNoContent());
+        verify(service).deletePurchase(storeUuid, ok);
+        mockMvc.perform(delete("/api/purchase/" + missing).header(StoreHeader.NAME, storeUuid)).andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/purchase/" + consumed).header(StoreHeader.NAME, storeUuid)).andExpect(status().isConflict());
+    }
+
+    @Test
+    @DisplayName("Deve responder 400 sem chamar o service quando falta o header X-Store-Id ou ele não é um uuid")
+    void shouldRequireStoreHeader() throws Exception {
+        mockMvc.perform(get("/api/purchase")).andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/purchase").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(delete("/api/purchase/" + UUID.randomUUID())).andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/purchase").header(StoreHeader.NAME, "loja-1")).andExpect(status().isBadRequest());
+
+        verify(service, never()).findAll(any(), any());
+        verify(service, never()).registerPurchase(any(), any());
+        verify(service, never()).deletePurchase(any(), any());
+    }
+
+    @Test
+    @DisplayName("Deve responder 404 quando a loja do header não existe")
+    void shouldReturnNotFoundForUnknownStore() throws Exception {
+        when(service.findAll(eq(storeUuid), any(Pageable.class)))
+                .thenThrow(new EntityNotFoundException("Loja com uuid: " + storeUuid + " não encontrada."));
+
+        mockMvc.perform(get("/api/purchase").header(StoreHeader.NAME, storeUuid)).andExpect(status().isNotFound());
     }
 
     @Test
     @DisplayName("Não deve existir edição: a movimentação é imutável (PUT responde 405)")
     void shouldNotAllowUpdate() throws Exception {
-        mockMvc.perform(put("/api/purchase/" + UUID.randomUUID()).contentType(MediaType.APPLICATION_JSON)
+        mockMvc.perform(put("/api/purchase/" + UUID.randomUUID()).header(StoreHeader.NAME, storeUuid).contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isMethodNotAllowed());
     }

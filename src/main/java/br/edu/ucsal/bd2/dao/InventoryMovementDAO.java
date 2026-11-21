@@ -10,9 +10,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 import br.edu.ucsal.bd2.model.InventoryMovement;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.util.MovementType;
 
 // Movimentações de estoque. Por enquanto só as compras (PURCHASE) são expostas; a venda e a perda entram depois.
+// Toda consulta é de uma loja: a movimentação de outra loja não é achada por aqui.
 // O saldo (inventory) NUNCA é escrito aqui: o trigger do banco o atualiza a cada inserção ou remoção.
 @Repository
 public class InventoryMovementDAO extends GenericDAO<InventoryMovement, Long> {
@@ -23,29 +25,32 @@ public class InventoryMovementDAO extends GenericDAO<InventoryMovement, Long> {
 
     // Produto e fornecedor vêm no mesmo SELECT (JOIN FETCH): senão cada compra da página dispararia consultas extras.
     // As compras mais recentes primeiro; o id no fim da ordenação mantém a ordem estável entre páginas.
-    public Page<InventoryMovement> findPurchases(Pageable pageable) {
+    public Page<InventoryMovement> findPurchases(Store store, Pageable pageable) {
         List<InventoryMovement> content = em.createQuery(
                         "SELECT m FROM InventoryMovement m JOIN FETCH m.product LEFT JOIN FETCH m.supplier "
-                                + "WHERE m.type = :type ORDER BY m.createdAt DESC, m.id DESC", InventoryMovement.class)
+                                + "WHERE m.store = :store AND m.type = :type ORDER BY m.createdAt DESC, m.id DESC", InventoryMovement.class)
+                .setParameter("store", store)
                 .setParameter("type", MovementType.PURCHASE)
                 .setFirstResult((int) pageable.getOffset())
                 .setMaxResults(pageable.getPageSize())
                 .getResultList();
 
         Long total = em.createQuery(
-                        "SELECT COUNT(m) FROM InventoryMovement m WHERE m.type = :type", Long.class)
+                        "SELECT COUNT(m) FROM InventoryMovement m WHERE m.store = :store AND m.type = :type", Long.class)
+                .setParameter("store", store)
                 .setParameter("type", MovementType.PURCHASE)
                 .getSingleResult();
 
         return new PageImpl<>(content, pageable, total);
     }
 
-    // Só enxerga compras: o uuid de uma venda ou de uma perda não é achado por aqui.
-    public Optional<InventoryMovement> findPurchaseByUuid(UUID uuid) {
+    // Só enxerga compras da loja: o uuid de uma venda, de uma perda ou de uma compra de outra loja não é achado por aqui.
+    public Optional<InventoryMovement> findPurchaseByUuid(Store store, UUID uuid) {
         List<InventoryMovement> result = em.createQuery(
                         "SELECT m FROM InventoryMovement m JOIN FETCH m.product LEFT JOIN FETCH m.supplier "
-                                + "WHERE m.uuid = :uuid AND m.type = :type", InventoryMovement.class)
+                                + "WHERE m.uuid = :uuid AND m.store = :store AND m.type = :type", InventoryMovement.class)
                 .setParameter("uuid", uuid)
+                .setParameter("store", store)
                 .setParameter("type", MovementType.PURCHASE)
                 .getResultList();
 

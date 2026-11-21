@@ -1,10 +1,10 @@
 -- Seed de dados semi-realistas para o banco "grocery" (PostgreSQL).
 --
 -- Volume gerado:
---    20 categorias | 200 produtos | 100 fornecedores | 15 funcionarios
---   2.000 vendas (1.997 historicas + 3 em andamento), com itens, pagamentos e baixas de estoque,
---   espalhadas por 26 meses (780 dias) ate ontem; compras de reposicao, perdas (LOSS) e
---   historico de precos coerentes entre si. Leva alguns segundos.
+--    20 categorias | 200 produtos | 100 fornecedores | 3 lojas | 16 funcionarios
+--   2.000 vendas (1.997 historicas + 3 em andamento) divididas entre as lojas (cerca de 45% / 33% / 22%),
+--   com itens, pagamentos e baixas de estoque, espalhadas por 26 meses (780 dias) ate ontem; compras de
+--   reposicao, perdas (LOSS) e historico de precos coerentes entre si. Leva alguns segundos.
 --
 -- Como executar:
 --   a) ./mvnw -Pseed   (sobe o Spring sem web, cria tabelas/triggers se faltarem, popula e encerra)
@@ -16,7 +16,7 @@
 -- para funcionar tanto no psql quanto no spring.sql.init (ver application-seed.properties).
 --
 -- Garantias:
---   * Idempotente: se ja existir fornecedor, funcionario, preco, venda ou movimentacao, nada e
+--   * Idempotente: se ja existir loja, fornecedor, funcionario, preco, venda ou movimentacao, nada e
 --     inserido (so um aviso). Categorias e produtos criados pelo Config.java sao reaproveitados
 --     (por nome / codigo de barras), entao o total fica em 20 / 200 com ou sem eles.
 --   * Reproduzivel: usa setseed() e nenhum sorteio depende do plano de execucao, entao a mesma
@@ -27,6 +27,9 @@
 --   * Tudo-ou-nada: o bloco principal roda numa transacao so; se algo falhar, nada fica pela metade.
 --
 -- Premissas de negocio (o codigo ainda nao tem regra de venda, entao ficaram explicitas aqui):
+--   * Multi-loja: catalogo (categoria, produto, preco) e fornecedores sao da rede. Cada loja tem os seus
+--     funcionarios (o ADMIN e da rede e fica sem loja), as suas vendas e o seu estoque; reposicao, perdas e
+--     vencimento de lotes sao simulados por (loja, produto). O vendedor de uma venda e caixa da loja dela.
 --   * Estoque so baixa em venda COMPLETED (uma movimentacao SALE por item). Vendas CANCELED e OPEN
 --     tem itens, mas nao movimentam estoque (nao existe movimentacao de estorno, e a movimentacao
 --     e imutavel).
@@ -35,7 +38,7 @@
 --   * Documentos (CPF/CNPJ) e codigos de barras (EAN-13) tem digito verificador valido; CPF/CNPJ
 --     guardados so com digitos. Itens pesaveis usam EAN-13 interno (prefixo 2).
 --   * Para recomecar do zero:  TRUNCATE sale, payment, sale_items, inventory_movement, inventory,
---     price, product, category, supplier, staff, customer, person RESTART IDENTITY CASCADE;
+--     price, product, category, supplier, store, staff, customer, person RESTART IDENTITY CASCADE;
 
 SET client_encoding TO 'UTF8';;
 
@@ -148,6 +151,9 @@ DECLARE
     v_u            double precision;
     r              record;
     slot           record;                               -- (nao chamar de "s": colide com alias das consultas)
+    shop           record;                               -- loja da vez nos lacos por loja
+    v_store_n      int;
+    v_store_id     bigint;
     v_changes      int;
     v_cur          numeric;
     v_from         timestamptz;
@@ -181,11 +187,12 @@ DECLARE
 BEGIN
     -- ---- Guarda de idempotencia -----------------------------------------------------------
     IF EXISTS (SELECT 1 FROM supplier)
+       OR EXISTS (SELECT 1 FROM store)
        OR EXISTS (SELECT 1 FROM staff)
        OR EXISTS (SELECT 1 FROM price)
        OR EXISTS (SELECT 1 FROM sale)
        OR EXISTS (SELECT 1 FROM inventory_movement) THEN
-        RAISE NOTICE 'seed ignorado: ja existem dados de fornecedor/funcionario/preco/venda/estoque (veja o TRUNCATE no topo do arquivo).';
+        RAISE NOTICE 'seed ignorado: ja existem dados de loja/fornecedor/funcionario/preco/venda/estoque (veja o TRUNCATE no topo do arquivo).';
         RETURN;
     END IF;
 
@@ -262,17 +269,15 @@ BEGIN
         -- derivados na etapa 3
         weight       double precision,        -- peso de popularidade (amostragem de itens)
         daily_units  double precision,        -- demanda diaria esperada, na unidade de medida
-        pack         numeric,                 -- tamanho minimo do lote de compra
+        pack         numeric,                 -- lote de compra da rede (a loja compra lotes menores: tmp_store_prod)
         no_restock_after date,                -- ruptura proposital nos ultimos dias (para consultas de estoque baixo)
         qty_k        numeric,                 -- copiados de tmp_cat: o sorteio roda numa tabela so, sem JOIN,
         loss_prob    numeric,                 -- para o resultado nao depender do plano de execucao
-        order_up_to  numeric,                 -- nivel alvo apos a reposicao
         sup_main     bigint,
         sup_alt      bigint,
         review_dow   int,                     -- dia da semana (1=seg..6=sab) da entrega do fornecedor
         review_dow2  int,                     -- 2a entrega semanal (so perecíveis)
-        perishable   boolean,
-        batch_expiry date                     -- validade do lote mais recente (para baixa por vencimento)
+        perishable   boolean                  -- (lote da loja e validade do lote ficam em tmp_store_prod)
     ) ON COMMIT DROP;
 
     INSERT INTO tmp_prod (n, cat_idx, name, descr, unit, price_now, pop)
@@ -711,33 +716,65 @@ BEGIN
      WHERE p.n = pc.n;
 
     -- ==========================================================================================
-    -- 4) Funcionarios (15)
+    -- 4) Lojas (3) e funcionarios (16)
+    --    share e a fatia das vendas da rede que cada loja recebe. Cada loja e cadastrada antes de
+    --    contratar o primeiro funcionario; o gerente e definido depois, porque precisa trabalhar nela.
     -- ==========================================================================================
+    CREATE TEMP TABLE tmp_store (
+        n          int PRIMARY KEY,
+        name       text NOT NULL,
+        street     text NOT NULL,
+        number     text NOT NULL,
+        district   text NOT NULL,
+        zip        text NOT NULL,
+        share      numeric NOT NULL,
+        opened_at  date NOT NULL,
+        manager_n  int NOT NULL,
+        id         bigint
+    ) ON COMMIT DROP;
+
+    INSERT INTO tmp_store (n, name, street, number, district, zip, share, opened_at, manager_n) VALUES
+        (1, 'Mercado Central - Pituba',  'Av. Manoel Dias da Silva', '1200', 'Pituba', '41830000', 0.45, v_start - 820,  2),
+        (2, 'Mercado Central - Barra',   'Av. Sete de Setembro',     '3450', 'Barra',  '40140000', 0.33, v_start - 420,  3),
+        (3, 'Mercado Central - Itapuã',  'Rua da Música',            '85',   'Itapuã', '41610000', 0.22, v_start - 260, 16);
+
+    INSERT INTO store (uuid, name, street, number, district, city, state, zip_code, created_at, updated_at)
+    SELECT md5('store:' || s.n)::uuid, s.name, s.street, s.number, s.district, 'Salvador', 'BA', s.zip,
+           (s.opened_at + time '08:00')::timestamp AT TIME ZONE c_tz,
+           (s.opened_at + time '08:00')::timestamp AT TIME ZONE c_tz
+      FROM tmp_store s
+     ORDER BY s.n;
+
+    UPDATE tmp_store s SET id = x.id FROM store x WHERE x.uuid = md5('store:' || s.n)::uuid;
+
+    -- store_n nulo so para o ADMIN, que e da rede (o CHECK ck_staff_store_by_role confere).
     CREATE TEMP TABLE tmp_staff (
         n          int PRIMARY KEY,
         name       text NOT NULL,
         role       text NOT NULL,
+        store_n    int,
         hired_at   date NOT NULL,
         left_at    date,
         id         bigint
     ) ON COMMIT DROP;
 
-    INSERT INTO tmp_staff (n, name, role, hired_at, left_at) VALUES
-        ( 1, 'Roberto Almeida Santos',     'ADMIN',    v_start - 900, NULL),
-        ( 2, 'Fernanda Costa Menezes',     'MANAGER',  v_start - 700, NULL),
-        ( 3, 'Marcelo Queiroz Barreto',    'MANAGER',  v_start - 400, NULL),
-        ( 4, 'Juliana Souza Ribeiro',      'CASHIER',  v_start - 600, NULL),
-        ( 5, 'Carlos Eduardo Nascimento',  'CASHIER',  v_start - 500, NULL),
-        ( 6, 'Patrícia Oliveira Lima',     'CASHIER',  v_start - 450, NULL),
-        ( 7, 'Anderson Ferreira Pinto',    'CASHIER',  v_start - 300, NULL),
-        ( 8, 'Larissa Gomes Cardoso',      'CASHIER',  v_start - 200, NULL),
-        ( 9, 'Tiago Lopes Moreira',        'CASHIER',  v_start - 120, v_end - 330),   -- pediu demissao
-        (10, 'Viviane Rocha Teixeira',     'CASHIER',  v_start + 150, NULL),          -- contratada no meio
-        (11, 'Gabriel Santana Freitas',    'CASHIER',  v_start + 400, NULL),
-        (12, 'Edson Pereira Duarte',       'STOCKIST', v_start - 800, NULL),
-        (13, 'Mônica Araújo Batista',      'STOCKIST', v_start - 350, NULL),
-        (14, 'Rafael Mendes Carvalho',     'STOCKIST', v_start - 100, NULL),
-        (15, 'Isabela Correia Andrade',    'STOCKIST', v_start + 200, NULL);
+    INSERT INTO tmp_staff (n, name, role, store_n, hired_at, left_at) VALUES
+        ( 1, 'Roberto Almeida Santos',     'ADMIN',    NULL, v_start - 900, NULL),
+        ( 2, 'Fernanda Costa Menezes',     'MANAGER',  1,    v_start - 700, NULL),
+        ( 3, 'Marcelo Queiroz Barreto',    'MANAGER',  2,    v_start - 400, NULL),
+        ( 4, 'Juliana Souza Ribeiro',      'CASHIER',  1,    v_start - 600, NULL),
+        ( 5, 'Carlos Eduardo Nascimento',  'CASHIER',  1,    v_start - 500, NULL),
+        ( 6, 'Patrícia Oliveira Lima',     'CASHIER',  1,    v_start - 450, NULL),
+        ( 7, 'Anderson Ferreira Pinto',    'CASHIER',  2,    v_start - 300, NULL),
+        ( 8, 'Larissa Gomes Cardoso',      'CASHIER',  3,    v_start - 200, NULL),
+        ( 9, 'Tiago Lopes Moreira',        'CASHIER',  2,    v_start - 120, v_end - 330),   -- pediu demissao
+        (10, 'Viviane Rocha Teixeira',     'CASHIER',  1,    v_start + 150, NULL),          -- contratada no meio
+        (11, 'Gabriel Santana Freitas',    'CASHIER',  2,    v_start + 400, NULL),
+        (12, 'Edson Pereira Duarte',       'STOCKIST', 1,    v_start - 800, NULL),
+        (13, 'Mônica Araújo Batista',      'STOCKIST', 2,    v_start - 350, NULL),
+        (14, 'Rafael Mendes Carvalho',     'STOCKIST', 3,    v_start - 100, NULL),
+        (15, 'Isabela Correia Andrade',    'STOCKIST', 1,    v_start + 200, NULL),
+        (16, 'Luciana Prado Matos',        'MANAGER',  3,    v_start - 250, NULL);
 
 -- Herança JOINED: dados comuns em person; o cargo em staff, com o mesmo id
 INSERT INTO person (uuid, tax_number, name, created_at, updated_at, deleted_at)
@@ -752,10 +789,19 @@ ORDER BY t.n;
 
 UPDATE tmp_staff t SET id = p.id FROM person p WHERE p.uuid = md5('staff:' || t.n)::uuid;
 
-INSERT INTO staff (id, role)
-SELECT t.id, t.role
+INSERT INTO staff (id, role, store_id)
+SELECT t.id, t.role, s.id
 FROM tmp_staff t
+LEFT JOIN tmp_store s ON s.n = t.store_n
 ORDER BY t.n;
+
+    -- Gerente de cada loja: funcionario dela (a FK composta fk_store_manager_same_store confere).
+    UPDATE store x
+       SET manager_id = t.id,
+           updated_at = greatest(x.created_at, (t.hired_at + time '09:00')::timestamp AT TIME ZONE c_tz)
+      FROM tmp_store s
+      JOIN tmp_staff t ON t.n = s.manager_n
+     WHERE x.id = s.id;
 
     -- ==========================================================================================
     -- 5) Historico de precos (price)
@@ -804,7 +850,8 @@ ORDER BY t.n;
     -- 6) Parametros de reposicao por produto
     -- ==========================================================================================
     -- Peso de popularidade (curva concentrada: poucos itens vendem muito) e demanda diaria
-    -- esperada, em unidade de medida. Itens por dia (media): ~2000 vendas * ~7 itens / dias do periodo.
+    -- esperada da rede, em unidade de medida. Itens por dia (media): ~2000 vendas * ~7 itens / dias do periodo.
+    -- A demanda de uma loja e a da rede vezes a fatia dela (tmp_store.share).
     UPDATE tmp_prod p SET weight = (p.pop ^ 2.2)
                            * CASE WHEN p.unit IN ('GRAM', 'MILLILITER', 'LITER') THEN 0.5 ELSE 1 END;
 
@@ -821,7 +868,7 @@ ORDER BY t.n;
      WHERE c.idx = p.cat_idx;
 
     -- Perecivel = validade curta (<= 35 dias): lote pequeno e duas entregas por semana.
-    -- A demanda da loja e baixa (~18 itens/dia), entao o lote precisa ser pequeno para nao vencer.
+    -- A demanda e baixa (~18 itens/dia na rede, dividida entre as lojas), entao o lote precisa ser pequeno para nao vencer.
     UPDATE tmp_prod p SET
         perishable = (c.shelf_max IS NOT NULL AND c.shelf_max <= 35),
         qty_k = c.qty_k,
@@ -838,13 +885,24 @@ ORDER BY t.n;
       FROM tmp_cat c
      WHERE c.idx = p.cat_idx;
 
-    -- Estoque de abertura (so nao perecíveis): cobre ~cover_days da demanda esperada, minimo 2 lotes.
     -- Segunda entrega semanal so para perecíveis (dow, dow+3).
     UPDATE tmp_prod p SET
-        order_up_to = greatest(p.pack * 2, ceil(p.daily_units * c.cover_days * 1.5 / p.pack) * p.pack),
-        review_dow2 = CASE WHEN p.perishable THEN ((p.review_dow + 2) % 6) + 1 END
-      FROM tmp_cat c
-     WHERE c.idx = p.cat_idx;
+        review_dow2 = CASE WHEN p.perishable THEN ((p.review_dow + 2) % 6) + 1 END;
+
+    -- Estado de cada produto em cada loja: o lote de compra e a validade do lote mais recente (para a baixa
+    -- por vencimento). A loja compra em lotes proporcionais ao movimento dela (lote da rede x fatia da loja):
+    -- com o lote cheio, uma loja pequena levaria meses para girar o estoque minimo e perderia o lote vencido.
+    CREATE TEMP TABLE tmp_store_prod (
+        store_n      int NOT NULL,
+        n            int NOT NULL,
+        pack         numeric NOT NULL,
+        batch_expiry date,
+        PRIMARY KEY (store_n, n)
+    ) ON COMMIT DROP;
+    INSERT INTO tmp_store_prod (store_n, n, pack)
+    SELECT s.n, p.n,
+           CASE WHEN p.unit = 'UNIT' THEN greatest(1, round(p.pack * s.share)) ELSE round(p.pack * s.share, 3) END
+      FROM tmp_store s CROSS JOIN tmp_prod p;
 
     -- Ruptura proposital: alguns itens de giro alto deixam de ser repostos nos ultimos 12 dias,
     -- para que existam produtos com estoque baixo/zerado na foto final do banco.
@@ -861,23 +919,29 @@ ORDER BY t.n;
         SELECT n, id, name, unit, cat_idx, qty_k, weight FROM tmp_prod ORDER BY n;
 
     -- ==========================================================================================
-    -- 7) Carga inicial de estoque (compras de abertura dos nao perecíveis, uma por produto)
-    --    Os perecíveis entram pela primeira entrega semanal, so se houver demanda.
+    -- 7) Carga inicial de estoque (compras de abertura dos nao perecíveis, uma por produto em cada loja)
+    --    Cobre ~cover_days da demanda esperada da loja, minimo 2 lotes da loja. Os perecíveis entram pela
+    --    primeira entrega semanal, so se houver demanda.
     -- ==========================================================================================
-    FOR r IN SELECT p.*, c.shelf_min, c.shelf_max, c.cost_ratio
-               FROM tmp_prod p JOIN tmp_cat c ON c.idx = p.cat_idx
-              WHERE NOT p.perishable ORDER BY p.n LOOP
-        v_cost := greatest(round(
-            (SELECT cents FROM tmp_price WHERE product_id = r.id ORDER BY valid_from LIMIT 1)
-            * r.cost_ratio * (0.97 + random() * 0.06)), 1);
-        v_expires := CASE WHEN r.shelf_min IS NULL THEN NULL
-                          ELSE v_open + (r.shelf_min + floor(random() * (r.shelf_max - r.shelf_min + 1))::int) END;
-        INSERT INTO inventory_movement (product_id, supplier_id, type, quantity, unit_cost_in_cents,
-                                        batch_expires_at, created_at)
-        VALUES (r.id, r.sup_main, 'PURCHASE', r.order_up_to, v_cost, v_expires,
-                (v_open + time '06:00' + r.n * interval '2 minutes')::timestamp AT TIME ZONE c_tz);
-        UPDATE tmp_prod SET batch_expiry = v_expires WHERE n = r.n;
-        v_buy_count := v_buy_count + 1;
+    FOR shop IN SELECT n, id, share FROM tmp_store ORDER BY n LOOP
+        FOR r IN SELECT p.id, p.n, p.daily_units, p.sup_main, sp.pack, c.shelf_min, c.shelf_max, c.cost_ratio, c.cover_days
+                   FROM tmp_prod p
+                   JOIN tmp_cat c ON c.idx = p.cat_idx
+                   JOIN tmp_store_prod sp ON sp.store_n = shop.n AND sp.n = p.n
+                  WHERE NOT p.perishable ORDER BY p.n LOOP
+            v_cost := greatest(round(
+                (SELECT cents FROM tmp_price WHERE product_id = r.id ORDER BY valid_from LIMIT 1)
+                * r.cost_ratio * (0.97 + random() * 0.06)), 1);
+            v_expires := CASE WHEN r.shelf_min IS NULL THEN NULL
+                              ELSE v_open + (r.shelf_min + floor(random() * (r.shelf_max - r.shelf_min + 1))::int) END;
+            v_order_qty := greatest(r.pack * 2, ceil(r.daily_units * shop.share * r.cover_days * 1.5 / r.pack) * r.pack);
+            INSERT INTO inventory_movement (store_id, product_id, supplier_id, type, quantity, unit_cost_in_cents,
+                                            batch_expires_at, created_at)
+            VALUES (shop.id, r.id, r.sup_main, 'PURCHASE', v_order_qty, v_cost, v_expires,
+                    (v_open + time '06:00' + r.n * interval '2 minutes')::timestamp AT TIME ZONE c_tz);
+            UPDATE tmp_store_prod SET batch_expiry = v_expires WHERE store_n = shop.n AND n = r.n;
+            v_buy_count := v_buy_count + 1;
+        END LOOP;
     END LOOP;
 
     -- ==========================================================================================
@@ -947,12 +1011,14 @@ ORDER BY t.n;
     CREATE TEMP TABLE tmp_plan (
         n        int PRIMARY KEY,
         ts       timestamptz NOT NULL,
+        store_n  int NOT NULL,
         status   text NOT NULL,
         client   text
     ) ON COMMIT DROP;
 
     CREATE TEMP TABLE tmp_basket (
         sale_n     int NOT NULL,
+        store_n    int NOT NULL,
         product_id bigint NOT NULL,
         sale_ts    timestamptz NOT NULL,
         completed  boolean NOT NULL,
@@ -960,9 +1026,16 @@ ORDER BY t.n;
         unit_price bigint NOT NULL,
         PRIMARY KEY (sale_n, product_id)
     ) ON COMMIT DROP;
-    CREATE INDEX ix_tmp_basket_demand ON tmp_basket (product_id, sale_ts) WHERE completed;
+    CREATE INDEX ix_tmp_basket_demand ON tmp_basket (store_n, product_id, sale_ts) WHERE completed;
 
     FOR slot IN SELECT n, ts FROM tmp_slot ORDER BY n LOOP
+        -- loja: sorteio ponderado pela fatia de cada uma (as fatias somam 1)
+        v_u := random();
+        SELECT x.n INTO v_store_n
+          FROM (SELECT n, sum(share) OVER (ORDER BY n) AS cum FROM tmp_store) x
+         WHERE x.cum > v_u
+         ORDER BY x.n LIMIT 1;
+
         -- status: a maioria concluida; algumas canceladas
         v_status := CASE WHEN random() < 0.955 THEN 'COMPLETED' ELSE 'CANCELED' END;
 
@@ -974,7 +1047,7 @@ ORDER BY t.n;
                         ELSE 1 + floor(power(random(), 1.7) * 350)::int END;
             SELECT doc INTO v_client FROM tmp_client WHERE n = v_n;
         END IF;
-        INSERT INTO tmp_plan (n, ts, status, client) VALUES (slot.n, slot.ts, v_status, v_client);
+        INSERT INTO tmp_plan (n, ts, store_n, status, client) VALUES (slot.n, slot.ts, v_store_n, v_status, v_client);
 
         -- numero de itens distintos: lognormal (mediana ~5, cauda ate ~30)
         v_nitems := greatest(1, least(30, round(exp(1.65 + 0.65 * pg_temp.fn_normal()))::int));
@@ -1003,8 +1076,8 @@ ORDER BY t.n;
             v_price := (SELECT cents FROM tmp_price
                          WHERE product_id = r.id AND valid_from <= slot.ts
                          ORDER BY valid_from DESC LIMIT 1);
-            INSERT INTO tmp_basket (sale_n, product_id, sale_ts, completed, qty, unit_price)
-            VALUES (slot.n, r.id, slot.ts, v_status = 'COMPLETED', v_qty, v_price);
+            INSERT INTO tmp_basket (sale_n, store_n, product_id, sale_ts, completed, qty, unit_price)
+            VALUES (slot.n, v_store_n, r.id, slot.ts, v_status = 'COMPLETED', v_qty, v_price);
         END LOOP;
     END LOOP;
 
@@ -1015,29 +1088,32 @@ ORDER BY t.n;
     -- ==========================================================================================
     FOR v_day IN SELECT g::date FROM generate_series((v_open + 1)::timestamp, v_end::timestamp, interval '1 day') g LOOP
 
-        -- 10.1) Entregas do dia (seg-sab): para cada produto cujo fornecedor entrega hoje, compra o que
-        --       as vendas da janela seguinte vao consumir (+10%), descontando o saldo. Perecíveis tem duas
-        --       entregas por semana (janela de 4 dias), os demais uma (janela de 7 dias).
+        -- 10.1) Entregas do dia (seg-sab), loja por loja: para cada produto cujo fornecedor entrega hoje,
+        --       compra o que as vendas da loja na janela seguinte vao consumir (+10%), descontando o saldo
+        --       dela. Perecíveis tem duas entregas por semana (janela de 4 dias), os demais uma (janela de 7 dias).
         --       Antes, baixa por vencimento do que sobrou de um lote vencido.
         v_k := 0;
         IF extract(isodow FROM v_day)::int BETWEEN 1 AND 6 THEN
+          FOR shop IN SELECT n, id, share FROM tmp_store ORDER BY n LOOP
             FOR r IN
-                SELECT p.id, p.n, p.pack, p.sup_main, p.sup_alt, p.batch_expiry, p.no_restock_after,
+                SELECT p.id, p.n, sp.pack, p.sup_main, p.sup_alt, sp.batch_expiry, p.no_restock_after,
                        c.shelf_min, c.shelf_max, c.cost_ratio,
                        COALESCE(i.total_quantity, 0) AS stock,
                        (SELECT COALESCE(sum(b.qty), 0)
                           FROM tmp_basket b
-                         WHERE b.product_id = p.id AND b.completed
+                         WHERE b.store_n = shop.n AND b.product_id = p.id AND b.completed
                            AND b.sale_ts >= v_day::timestamp AT TIME ZONE c_tz
                            AND b.sale_ts <  (v_day + CASE WHEN p.perishable THEN 4 ELSE 7 END)::timestamp AT TIME ZONE c_tz
                        )
                        -- parte da janela que cai depois de "ontem": nao ha venda planejada, usa a demanda
-                       -- esperada (senao o estoque ficaria zerado justamente na foto final do banco)
-                       + p.daily_units * greatest(0, (v_day + CASE WHEN p.perishable THEN 4 ELSE 7 END) - (v_end + 1))
+                       -- esperada da loja (senao o estoque ficaria zerado justamente na foto final do banco)
+                       + p.daily_units * shop.share
+                         * greatest(0, (v_day + CASE WHEN p.perishable THEN 4 ELSE 7 END) - (v_end + 1))
                        AS need
                   FROM tmp_prod p
                   JOIN tmp_cat c ON c.idx = p.cat_idx
-                  LEFT JOIN inventory i ON i.product_id = p.id
+                  JOIN tmp_store_prod sp ON sp.store_n = shop.n AND sp.n = p.n
+                  LEFT JOIN inventory i ON i.store_id = shop.id AND i.product_id = p.id
                  WHERE (p.review_dow = extract(isodow FROM v_day)::int
                         OR p.review_dow2 = extract(isodow FROM v_day)::int)
                    AND (p.no_restock_after IS NULL OR v_day <= p.no_restock_after)
@@ -1046,12 +1122,12 @@ ORDER BY t.n;
                 v_stock := r.stock;
                 IF r.batch_expiry < v_day AND v_stock > 0 THEN
                     v_k := v_k + 1;
-                    INSERT INTO inventory_movement (product_id, type, quantity, created_at)
-                    VALUES (r.id, 'LOSS', v_stock,
+                    INSERT INTO inventory_movement (store_id, product_id, type, quantity, created_at)
+                    VALUES (shop.id, r.id, 'LOSS', v_stock,
                             (v_day + time '05:00' + v_k * interval '5 seconds')::timestamp AT TIME ZONE c_tz);
                     v_loss_count := v_loss_count + 1;
                     v_stock := 0;
-                    UPDATE tmp_prod SET batch_expiry = NULL WHERE n = r.n;
+                    UPDATE tmp_store_prod SET batch_expiry = NULL WHERE store_n = shop.n AND n = r.n;
                 END IF;
 
                 CONTINUE WHEN r.need <= v_stock;
@@ -1066,33 +1142,36 @@ ORDER BY t.n;
                 v_expires := CASE WHEN r.shelf_min IS NULL THEN NULL
                                   ELSE v_day + (r.shelf_min + floor(random() * (r.shelf_max - r.shelf_min + 1))::int) END;
                 v_k := v_k + 1;
-                INSERT INTO inventory_movement (product_id, supplier_id, type, quantity, unit_cost_in_cents,
+                INSERT INTO inventory_movement (store_id, product_id, supplier_id, type, quantity, unit_cost_in_cents,
                                                 batch_expires_at, created_at)
-                VALUES (r.id, v_supplier, 'PURCHASE', v_order_qty, v_cost, v_expires,
+                VALUES (shop.id, r.id, v_supplier, 'PURCHASE', v_order_qty, v_cost, v_expires,
                         (v_day + time '05:00' + v_k * interval '5 seconds')::timestamp AT TIME ZONE c_tz);
-                UPDATE tmp_prod SET batch_expiry = v_expires WHERE n = r.n;
+                UPDATE tmp_store_prod SET batch_expiry = v_expires WHERE store_n = shop.n AND n = r.n;
                 v_buy_count := v_buy_count + 1;
             END LOOP;
+          END LOOP;
         END IF;
 
-        -- 10.2) Vendas do dia, em ordem de horario
-        SELECT array_agg(id ORDER BY n) INTO v_sellers
-          FROM tmp_staff
-         WHERE role = 'CASHIER' AND hired_at <= v_day AND (left_at IS NULL OR left_at > v_day);
-
-        FOR slot IN SELECT n, ts, status, client FROM tmp_plan
-                     WHERE ts >= v_day::timestamp AT TIME ZONE c_tz
-                       AND ts <  (v_day + 1)::timestamp AT TIME ZONE c_tz
-                     ORDER BY ts, n
+        -- 10.2) Vendas do dia de todas as lojas, em ordem de horario (os ids da rede seguem o tempo)
+        FOR slot IN SELECT pl.n, pl.ts, pl.status, pl.client, pl.store_n, s.id AS store_id
+                      FROM tmp_plan pl
+                      JOIN tmp_store s ON s.n = pl.store_n
+                     WHERE pl.ts >= v_day::timestamp AT TIME ZONE c_tz
+                       AND pl.ts <  (v_day + 1)::timestamp AT TIME ZONE c_tz
+                     ORDER BY pl.ts, pl.n
         LOOP
             v_status := slot.status;
 
-            -- vendedor: um dos caixas em atividade na data
+            -- vendedor: um dos caixas da loja em atividade na data (o trigger da venda confere a loja)
+            SELECT array_agg(id ORDER BY n) INTO v_sellers
+              FROM tmp_staff
+             WHERE store_n = slot.store_n AND role = 'CASHIER'
+               AND hired_at <= v_day AND (left_at IS NULL OR left_at > v_day);
             v_seller := v_sellers[1 + floor(random() * array_length(v_sellers, 1))::int];
 
-            INSERT INTO sale (uuid, seller_id, status, total_amount_in_cents, client_tax_number,
+            INSERT INTO sale (uuid, store_id, seller_id, status, total_amount_in_cents, client_tax_number,
                               created_at, updated_at)
-            VALUES (md5('sale:' || slot.n)::uuid, v_seller, v_status, 0, slot.client, slot.ts, slot.ts)
+            VALUES (md5('sale:' || slot.n)::uuid, slot.store_id, v_seller, v_status, 0, slot.client, slot.ts, slot.ts)
             RETURNING id INTO v_sale_id;
 
             v_total := 0;
@@ -1101,7 +1180,7 @@ ORDER BY t.n;
                 SELECT b.product_id, b.qty, b.unit_price, p.unit, COALESCE(i.total_quantity, 0) AS stock
                   FROM tmp_basket b
                   JOIN tmp_prod p ON p.id = b.product_id
-                  LEFT JOIN inventory i ON i.product_id = b.product_id
+                  LEFT JOIN inventory i ON i.store_id = slot.store_id AND i.product_id = b.product_id
                  WHERE b.sale_n = slot.n
                  ORDER BY p.n
             LOOP
@@ -1120,8 +1199,8 @@ ORDER BY t.n;
                 v_total := v_total + round(v_qty * r.unit_price);
 
                 IF v_status = 'COMPLETED' THEN
-                    INSERT INTO inventory_movement (product_id, sale_id, type, quantity, created_at)
-                    VALUES (r.product_id, v_sale_id, 'SALE', v_qty, slot.ts);
+                    INSERT INTO inventory_movement (store_id, product_id, sale_id, type, quantity, created_at)
+                    VALUES (slot.store_id, r.product_id, v_sale_id, 'SALE', v_qty, slot.ts);
                 END IF;
             END LOOP;
 
@@ -1198,37 +1277,42 @@ ORDER BY t.n;
             v_sale_count := v_sale_count + 1;
         END LOOP;
 
-        -- 10.3) Quebras e avarias (depois do fechamento): chance diaria por produto, no maximo uma
+        -- 10.3) Quebras e avarias (depois do fechamento): chance diaria por produto em cada loja, no maximo uma
         v_k := 0;
-        FOR r IN SELECT p.id, p.unit, p.loss_prob FROM tmp_prod p ORDER BY p.n LOOP
-            -- o sorteio fica no laco (ordem fixa por produto): random() dentro de um JOIN/WHERE seria
-            -- avaliado na ordem que o otimizador escolher, e o seed deixaria de ser reproduzivel
-            CONTINUE WHEN random() >= r.loss_prob;
-            SELECT total_quantity INTO v_stock FROM inventory WHERE product_id = r.id;
-            CONTINUE WHEN v_stock IS NULL OR v_stock < 1;
-            v_qty := CASE WHEN r.unit = 'UNIT'  THEN least(v_stock, 1 + floor(random() * 2))
-                          WHEN r.unit IN ('KG', 'LITER') THEN least(v_stock, round((0.2 + random() * 0.8)::numeric, 3))
-                          ELSE least(v_stock, round((50 + random() * 250)::numeric, 3)) END;
-            CONTINUE WHEN v_qty <= 0;
-            v_k := v_k + 1;
-            INSERT INTO inventory_movement (product_id, type, quantity, created_at)
-            VALUES (r.id, 'LOSS', v_qty,
-                    (v_day + time '22:05' + v_k * interval '15 seconds')::timestamp AT TIME ZONE c_tz);
-            v_loss_count := v_loss_count + 1;
+        FOR shop IN SELECT n, id FROM tmp_store ORDER BY n LOOP
+            FOR r IN SELECT p.id, p.unit, p.loss_prob FROM tmp_prod p ORDER BY p.n LOOP
+                -- o sorteio fica no laco (ordem fixa por loja e produto): random() dentro de um JOIN/WHERE seria
+                -- avaliado na ordem que o otimizador escolher, e o seed deixaria de ser reproduzivel
+                CONTINUE WHEN random() >= r.loss_prob;
+                SELECT total_quantity INTO v_stock FROM inventory WHERE store_id = shop.id AND product_id = r.id;
+                CONTINUE WHEN v_stock IS NULL OR v_stock < 1;
+                v_qty := CASE WHEN r.unit = 'UNIT'  THEN least(v_stock, 1 + floor(random() * 2))
+                              WHEN r.unit IN ('KG', 'LITER') THEN least(v_stock, round((0.2 + random() * 0.8)::numeric, 3))
+                              ELSE least(v_stock, round((50 + random() * 250)::numeric, 3)) END;
+                CONTINUE WHEN v_qty <= 0;
+                v_k := v_k + 1;
+                INSERT INTO inventory_movement (store_id, product_id, type, quantity, created_at)
+                VALUES (shop.id, r.id, 'LOSS', v_qty,
+                        (v_day + time '22:05' + v_k * interval '15 seconds')::timestamp AT TIME ZONE c_tz);
+                v_loss_count := v_loss_count + 1;
+            END LOOP;
         END LOOP;
     END LOOP;
 
     -- ==========================================================================================
-    -- 11) Vendas em andamento (OPEN): carrinhos abertos agora, sem pagamento nem baixa de estoque
+    -- 11) Vendas em andamento (OPEN): carrinhos abertos agora, sem pagamento nem baixa de estoque.
+    --     As lojas se revezam (com 3 vendas e 3 lojas, uma em cada).
     -- ==========================================================================================
-    SELECT array_agg(id ORDER BY n) INTO v_sellers
-      FROM tmp_staff WHERE role = 'CASHIER' AND left_at IS NULL AND hired_at <= current_date;
-
     FOR v_i IN REVERSE c_open..1 LOOP                   -- do mais antigo para o mais recente (ids em ordem do tempo)
+        v_store_n := 1 + (v_i - 1) % (SELECT count(*) FROM tmp_store)::int;
+        SELECT id INTO v_store_id FROM tmp_store WHERE n = v_store_n;
+        SELECT array_agg(id ORDER BY n) INTO v_sellers
+          FROM tmp_staff
+         WHERE store_n = v_store_n AND role = 'CASHIER' AND left_at IS NULL AND hired_at <= current_date;
         v_seller := v_sellers[1 + floor(random() * array_length(v_sellers, 1))::int];
         v_ts := now() - (v_i * 7 + floor(random() * 6)) * interval '1 minute';
-        INSERT INTO sale (uuid, seller_id, status, total_amount_in_cents, client_tax_number, created_at, updated_at)
-        VALUES (md5('sale:open:' || v_i)::uuid, v_seller, 'OPEN', 0, NULL, v_ts, v_ts)
+        INSERT INTO sale (uuid, store_id, seller_id, status, total_amount_in_cents, client_tax_number, created_at, updated_at)
+        VALUES (md5('sale:open:' || v_i)::uuid, v_store_id, v_seller, 'OPEN', 0, NULL, v_ts, v_ts)
         RETURNING id INTO v_sale_id;
         v_total := 0;
         FOR r IN SELECT p.id, p.unit FROM tmp_pick p
@@ -1251,12 +1335,16 @@ ORDER BY t.n;
     -- 12) Resumo
     -- ==========================================================================================
     RAISE NOTICE 'seed concluido:';
-    RAISE NOTICE '  categorias=% produtos=% fornecedores=% funcionarios=%',
+    RAISE NOTICE '  categorias=% produtos=% fornecedores=% lojas=% funcionarios=%',
         (SELECT count(*) FROM category), (SELECT count(*) FROM product),
-        (SELECT count(*) FROM supplier), (SELECT count(*) FROM staff);
+        (SELECT count(*) FROM supplier), (SELECT count(*) FROM store), (SELECT count(*) FROM staff);
     RAISE NOTICE '  vendas=% itens=% pagamentos=% precos=%',
         (SELECT count(*) FROM sale), (SELECT count(*) FROM sale_items),
         (SELECT count(*) FROM payment), (SELECT count(*) FROM price);
+    RAISE NOTICE '  vendas por loja: %',
+        (SELECT string_agg(st.name || '=' || x.total, ', ' ORDER BY st.id)
+           FROM (SELECT store_id, count(*) AS total FROM sale GROUP BY store_id) x
+           JOIN store st ON st.id = x.store_id);
     RAISE NOTICE '  movimentacoes: compras=% perdas=% vendas=% | linhas em inventory=%',
         (SELECT count(*) FROM inventory_movement WHERE type = 'PURCHASE'),
         (SELECT count(*) FROM inventory_movement WHERE type = 'LOSS'),

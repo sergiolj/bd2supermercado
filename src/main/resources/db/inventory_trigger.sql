@@ -5,6 +5,9 @@
 -- Os comandos sao separados por duas barras de ponto e virgula (spring.sql.init.separator),
 -- porque o corpo das funcoes PL/pgSQL contem ponto e virgula.
 --
+-- O estoque e por loja: inventory tem uma linha por (loja, produto) e cada movimentacao mexe so na linha
+-- da propria loja (inventory_movement.store_id).
+--
 -- Regras:
 --   INSERT em inventory_movement: PURCHASE soma; SALE e LOSS subtraem do inventory.
 --   DELETE em inventory_movement: desfaz o efeito da movimentacao removida.
@@ -12,6 +15,10 @@
 --   O estoque nunca pode ficar negativo; se ficaria, a operacao inteira e desfeita.
 
 -- Guardas de integridade -----------------------------------------------------------------
+
+-- Antes da loja, o estoque tinha uma linha por produto (uk_inventory_product). O ddl-auto=update cria a chave
+-- nova (uk_inventory_store_product), mas nunca apaga a antiga, que impediria o mesmo produto em duas lojas.
+ALTER TABLE inventory DROP CONSTRAINT IF EXISTS uk_inventory_product;;
 
 ALTER TABLE inventory DROP CONSTRAINT IF EXISTS ck_inventory_total_quantity_non_negative;;
 ALTER TABLE inventory ADD CONSTRAINT ck_inventory_total_quantity_non_negative
@@ -52,21 +59,22 @@ BEGIN
     END IF;
 
     BEGIN
-        -- Garante a linha do produto (seguro contra concorrencia). Nao da para fazer o upsert
+        -- Garante a linha do produto na loja (seguro contra concorrencia). Nao da para fazer o upsert
         -- direto com o delta: o CHECK valida a linha proposta antes de resolver o conflito,
         -- entao um delta negativo seria rejeitado mesmo havendo saldo.
-        INSERT INTO inventory (product_id, total_quantity, updated_at)
-        VALUES (mov.product_id, 0, now())
-        ON CONFLICT (product_id) DO NOTHING;
+        INSERT INTO inventory (store_id, product_id, total_quantity, updated_at)
+        VALUES (mov.store_id, mov.product_id, 0, now())
+        ON CONFLICT (store_id, product_id) DO NOTHING;
 
         -- O UPDATE trava a linha e o CHECK de saldo >= 0 valida o resultado.
         UPDATE inventory
            SET total_quantity = total_quantity + delta,
                updated_at     = now()
-         WHERE product_id = mov.product_id;
+         WHERE store_id = mov.store_id
+           AND product_id = mov.product_id;
     EXCEPTION WHEN check_violation THEN
-        RAISE EXCEPTION 'Estoque insuficiente: a operacao (% de % unidades) deixaria o estoque do produto % negativo',
-            TG_OP, mov.quantity, mov.product_id
+        RAISE EXCEPTION 'Estoque insuficiente: a operacao (% de % unidades) deixaria o estoque do produto % na loja % negativo',
+            TG_OP, mov.quantity, mov.product_id, mov.store_id
             USING ERRCODE = 'check_violation';
     END;
 

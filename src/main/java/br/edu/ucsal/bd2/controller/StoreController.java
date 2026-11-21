@@ -25,7 +25,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
-@Tag(name = "Lojas", description = "Cadastro de lojas e de seus gerentes (funcionários). Exclusão lógica.")
+@Tag(name = "Lojas", description = "Cadastro de lojas e de seus gerentes (funcionários da própria loja). O uuid da loja é o "
+        + "que as operações de loja (compras, estoque, vendas) mandam no header X-Store-Id. Exclusão lógica.")
 @RestController
 @RequestMapping("/api/store")
 public class StoreController {
@@ -60,11 +61,11 @@ public class StoreController {
     }
 
     @Operation(summary = "Cadastra uma loja",
-            description = "Só o nome é obrigatório. Se informar `managerUuid`, o funcionário precisa estar ativo e não gerenciar outra loja.")
+            description = "Só o nome é obrigatório. A loja nasce sem gerente: o gerente precisa ser funcionário dela, então "
+                    + "cadastre o funcionário com essa loja e depois defina o gerente no PUT.")
     @ApiResponse(responseCode = "201", description = "Loja criada")
-    @ApiResponse(responseCode = "400", description = "Nome, UF ou CEP inválidos")
-    @ApiResponse(responseCode = "404", description = "Gerente informado não existe (ou foi apagado)")
-    @ApiResponse(responseCode = "409", description = "Nome já usado por outra loja, ou funcionário já gerencia outra loja")
+    @ApiResponse(responseCode = "400", description = "Nome, UF ou CEP inválidos, ou `managerUuid` informado")
+    @ApiResponse(responseCode = "409", description = "Nome já usado por outra loja")
     @PostMapping
     public ResponseEntity<StoreResponse> createStore(@RequestBody StoreRequest request) {
         Store store = service.createStore(request);
@@ -73,11 +74,12 @@ public class StoreController {
     }
 
     @Operation(summary = "Atualiza uma loja",
-            description = "Substitui todos os campos. Sem `managerUuid`, a loja fica sem gerente.")
+            description = "Substitui todos os campos. Sem `managerUuid`, a loja fica sem gerente. O gerente precisa ser um "
+                    + "funcionário ativo da própria loja.")
     @ApiResponse(responseCode = "200", description = "Loja atualizada")
     @ApiResponse(responseCode = "400", description = "Dados inválidos")
     @ApiResponse(responseCode = "404", description = "Loja ou gerente inexistente")
-    @ApiResponse(responseCode = "409", description = "Nome já usado por outra loja, ou funcionário já gerencia outra loja")
+    @ApiResponse(responseCode = "409", description = "Nome já usado por outra loja, ou o gerente não trabalha nessa loja")
     @PutMapping("/{storeUuid}")
     public ResponseEntity<StoreResponse> updateStore(@PathVariable UUID storeUuid, @RequestBody StoreRequest request) {
         Store store = service.updateStore(storeUuid, request);
@@ -86,9 +88,11 @@ public class StoreController {
     }
 
     @Operation(summary = "Apaga uma loja (exclusão lógica)",
-            description = "O gerente é solto da loja, podendo gerenciar outra.")
+            description = "O histórico (vendas, compras, estoque) fica no banco. Só pode ser apagada sem funcionários ativos: "
+                    + "transfira-os ou apague-os antes (o gerente também é funcionário da loja).")
     @ApiResponse(responseCode = "204", description = "Loja apagada")
     @ApiResponse(responseCode = "404", description = "Loja inexistente ou já apagada")
+    @ApiResponse(responseCode = "409", description = "A loja ainda tem funcionários ativos")
     @DeleteMapping("/{storeUuid}")
     public ResponseEntity<Void> deleteStore(@PathVariable UUID storeUuid) {
         service.deleteStore(storeUuid);

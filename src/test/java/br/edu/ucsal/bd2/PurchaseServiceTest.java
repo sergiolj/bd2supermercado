@@ -27,11 +27,13 @@ import br.edu.ucsal.bd2.dao.InventoryMovementDAO;
 import br.edu.ucsal.bd2.dto.request.PurchaseRequest;
 import br.edu.ucsal.bd2.model.InventoryMovement;
 import br.edu.ucsal.bd2.model.Product;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.model.Supplier;
 import br.edu.ucsal.bd2.repository.ProductRepository;
 import br.edu.ucsal.bd2.repository.SupplierRepository;
 import br.edu.ucsal.bd2.service.CriteriaQueryService;
 import br.edu.ucsal.bd2.service.PurchaseService;
+import br.edu.ucsal.bd2.service.StoreService;
 import br.edu.ucsal.bd2.util.MeasurementType;
 import br.edu.ucsal.bd2.util.MovementType;
 import jakarta.persistence.EntityNotFoundException;
@@ -43,7 +45,10 @@ class PurchaseServiceTest {
     private final InventoryMovementDAO dao = mock(InventoryMovementDAO.class);
     private final ProductRepository productRepository = mock(ProductRepository.class);
     private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
-    private final PurchaseService service = new PurchaseService(dao, productRepository, supplierRepository);
+    private final StoreService storeService = mock(StoreService.class);
+    private final PurchaseService service = new PurchaseService(dao, productRepository, supplierRepository, storeService);
+
+    private final Store store = store("Loja Pituba");
 
     private final Product rice = product("Arroz 5kg", MeasurementType.UNIT);
     private final Product beans = product("Feijão a granel", MeasurementType.KG);
@@ -56,6 +61,15 @@ class PurchaseServiceTest {
         product.setUnitOfMeasure(unit);
         when(productRepository.findByUuidAndDeletedAtIsNull(product.getUuid())).thenReturn(Optional.of(product));
         return product;
+    }
+
+    // Loja do header X-Store-Id: o StoreService simulado a acha pelo uuid.
+    private Store store(String name) {
+        Store store = new Store();
+        store.setUuid(UUID.randomUUID());
+        store.setName(name);
+        when(storeService.findByUuid(store.getUuid())).thenReturn(store);
+        return store;
     }
 
     private Supplier supplier() {
@@ -72,19 +86,20 @@ class PurchaseServiceTest {
     }
 
     private void assertBadRequest(PurchaseRequest request) {
-        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.registerPurchase(request));
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.registerPurchase(store.getUuid(), request));
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
         verify(dao, never()).save(any());
     }
 
     @Test
-    @DisplayName("Deve lançar a compra como movimentação PURCHASE com produto, fornecedor, quantidade e custo")
+    @DisplayName("Deve lançar a compra como movimentação PURCHASE da loja do header, com produto, fornecedor, quantidade e custo")
     void shouldRegisterPurchase() {
         LocalDate expiresAt = LocalDate.now(CriteriaQueryService.STORE_ZONE).plusMonths(6);
 
-        InventoryMovement result = service.registerPurchase(request(rice, "24", 1850L, expiresAt));
+        InventoryMovement result = service.registerPurchase(store.getUuid(), request(rice, "24", 1850L, expiresAt));
 
         assertEquals(MovementType.PURCHASE, result.getType());
+        assertSame(store, result.getStore());
         assertSame(rice, result.getProduct());
         assertSame(supplier, result.getSupplier());
         assertEquals(0, new BigDecimal("24").compareTo(result.getQuantity()));
@@ -98,8 +113,8 @@ class PurchaseServiceTest {
     @DisplayName("Deve aceitar quantidade fracionada em produto por peso e validade hoje ou sem validade")
     void shouldAcceptFractionAndOptionalExpiration() {
         assertEquals(0, new BigDecimal("12.5").compareTo(
-                service.registerPurchase(request(beans, "12.500", 899L, null)).getQuantity()));
-        service.registerPurchase(request(beans, "1", 899L, LocalDate.now(CriteriaQueryService.STORE_ZONE)));
+                service.registerPurchase(store.getUuid(), request(beans, "12.500", 899L, null)).getQuantity()));
+        service.registerPurchase(store.getUuid(), request(beans, "1", 899L, LocalDate.now(CriteriaQueryService.STORE_ZONE)));
     }
 
     @Test
@@ -116,7 +131,7 @@ class PurchaseServiceTest {
     @DisplayName("Deve exigir quantidade inteira para produto por unidade")
     void shouldRequireWholeQuantityForUnitProducts() {
         assertBadRequest(request(rice, "1.5", 100L, null));
-        assertEquals(0, new BigDecimal("2").compareTo(service.registerPurchase(request(rice, "2.000", 100L, null)).getQuantity()));
+        assertEquals(0, new BigDecimal("2").compareTo(service.registerPurchase(store.getUuid(), request(rice, "2.000", 100L, null)).getQuantity()));
     }
 
     @Test
@@ -145,20 +160,43 @@ class PurchaseServiceTest {
         when(supplierRepository.findByUuidAndDeletedAtIsNull(unknown)).thenReturn(Optional.empty());
 
         assertThrows(EntityNotFoundException.class,
-                () -> service.registerPurchase(new PurchaseRequest(unknown, supplier.getUuid(), BigDecimal.ONE, 100L, null)));
+                () -> service.registerPurchase(store.getUuid(), new PurchaseRequest(unknown, supplier.getUuid(), BigDecimal.ONE, 100L, null)));
         assertThrows(EntityNotFoundException.class,
-                () -> service.registerPurchase(new PurchaseRequest(rice.getUuid(), unknown, BigDecimal.ONE, 100L, null)));
+                () -> service.registerPurchase(store.getUuid(), new PurchaseRequest(rice.getUuid(), unknown, BigDecimal.ONE, 100L, null)));
         verify(dao, never()).save(any());
     }
 
     @Test
-    @DisplayName("Deve retornar 404 quando a compra não existe (ou o uuid é de outro tipo de movimentação)")
+    @DisplayName("Deve retornar 404 quando a loja do header não existe, sem lançar nada")
+    void shouldRejectUnknownStore() {
+        UUID unknown = UUID.randomUUID();
+        when(storeService.findByUuid(unknown)).thenThrow(new EntityNotFoundException("Loja com uuid: " + unknown + " não encontrada."));
+
+        assertThrows(EntityNotFoundException.class, () -> service.registerPurchase(unknown, request(rice, "1", 100L, null)));
+        assertThrows(EntityNotFoundException.class, () -> service.findAll(unknown, null));
+        verify(dao, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Deve retornar 404 quando a compra não existe na loja (ou o uuid é de outro tipo de movimentação)")
     void shouldReturnNotFound() {
         UUID unknown = UUID.randomUUID();
-        when(dao.findPurchaseByUuid(unknown)).thenReturn(Optional.empty());
+        when(dao.findPurchaseByUuid(store, unknown)).thenReturn(Optional.empty());
 
-        assertThrows(EntityNotFoundException.class, () -> service.findByUuid(unknown));
-        assertThrows(EntityNotFoundException.class, () -> service.deletePurchase(unknown));
+        assertThrows(EntityNotFoundException.class, () -> service.findByUuid(store.getUuid(), unknown));
+        assertThrows(EntityNotFoundException.class, () -> service.deletePurchase(store.getUuid(), unknown));
+    }
+
+    @Test
+    @DisplayName("Uma loja não acha nem apaga a compra de outra loja")
+    void shouldNotSeePurchaseOfAnotherStore() {
+        InventoryMovement purchase = existingPurchase();
+        Store other = store("Loja Barra");
+        when(dao.findPurchaseByUuid(other, purchase.getUuid())).thenReturn(Optional.empty());
+
+        assertThrows(EntityNotFoundException.class, () -> service.findByUuid(other.getUuid(), purchase.getUuid()));
+        assertThrows(EntityNotFoundException.class, () -> service.deletePurchase(other.getUuid(), purchase.getUuid()));
+        verify(dao, never()).removeAndFlush(any());
     }
 
     @Test
@@ -166,7 +204,7 @@ class PurchaseServiceTest {
     void shouldDeletePurchase() {
         InventoryMovement purchase = existingPurchase();
 
-        service.deletePurchase(purchase.getUuid());
+        service.deletePurchase(store.getUuid(), purchase.getUuid());
 
         verify(dao).removeAndFlush(purchase);
     }
@@ -176,10 +214,10 @@ class PurchaseServiceTest {
     void shouldTranslateStockTriggerRefusal() {
         InventoryMovement purchase = existingPurchase();
         doThrow(new DataIntegrityViolationException("could not execute statement",
-                new RuntimeException("ERROR: Estoque insuficiente: a operacao (DELETE de 24 unidades) deixaria o estoque do produto 7 negativo")))
+                new RuntimeException("ERROR: Estoque insuficiente: a operacao (DELETE de 24 unidades) deixaria o estoque do produto 7 na loja 1 negativo")))
                 .when(dao).removeAndFlush(purchase);
 
-        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.deletePurchase(purchase.getUuid()));
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.deletePurchase(store.getUuid(), purchase.getUuid()));
 
         assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
         assertTrue(error.getReason().contains("Arroz 5kg"));
@@ -194,7 +232,7 @@ class PurchaseServiceTest {
         doThrow(other).when(dao).removeAndFlush(purchase);
 
         DataIntegrityViolationException thrown = assertThrows(DataIntegrityViolationException.class,
-                () -> service.deletePurchase(purchase.getUuid()));
+                () -> service.deletePurchase(store.getUuid(), purchase.getUuid()));
 
         assertSame(other, thrown);
     }
@@ -203,10 +241,11 @@ class PurchaseServiceTest {
         InventoryMovement purchase = new InventoryMovement();
         purchase.setUuid(UUID.randomUUID());
         purchase.setType(MovementType.PURCHASE);
+        purchase.setStore(store);
         purchase.setProduct(rice);
         purchase.setSupplier(supplier);
         purchase.setQuantity(new BigDecimal("24"));
-        when(dao.findPurchaseByUuid(purchase.getUuid())).thenReturn(Optional.of(purchase));
+        when(dao.findPurchaseByUuid(store, purchase.getUuid())).thenReturn(Optional.of(purchase));
         return purchase;
     }
 }

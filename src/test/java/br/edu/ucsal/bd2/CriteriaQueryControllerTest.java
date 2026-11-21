@@ -29,6 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.server.ResponseStatusException;
 
 import br.edu.ucsal.bd2.controller.CriteriaQueryController;
+import br.edu.ucsal.bd2.controller.StoreHeader;
 import br.edu.ucsal.bd2.dto.filter.ProductSearchFilter;
 import br.edu.ucsal.bd2.dto.filter.SaleSearchFilter;
 import br.edu.ucsal.bd2.dto.response.CategoryRevenueResponse;
@@ -95,7 +96,7 @@ class CriteriaQueryControllerTest {
 	@DisplayName("Should parse ISO dates and status when searching sales")
 	void shouldSearchSalesWithFilters() throws Exception {
 		SaleSummaryResponse row = new SaleSummaryResponse(UUID.randomUUID(), Instant.parse("2026-01-15T13:00:00Z"),
-				SaleStatus.COMPLETED, 15990L, "Maria Souza");
+				SaleStatus.COMPLETED, 15990L, "Loja Pituba", "Maria Souza");
 
 		when(service.searchSales(any(SaleSearchFilter.class), anyInt(), anyInt()))
 				.thenReturn(new PageImpl<>(List.of(row), PageRequest.of(0, 20), 1));
@@ -106,11 +107,26 @@ class CriteriaQueryControllerTest {
 				.param("status", "COMPLETED")
 				.param("minTotalInCents", "10000"))
 				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.content[0].storeName").value("Loja Pituba"))
 				.andExpect(jsonPath("$.content[0].sellerName").value("Maria Souza"))
 				.andExpect(jsonPath("$.content[0].status").value("COMPLETED"));
 
-		verify(service).searchSales(eq(new SaleSearchFilter(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31),
+		verify(service).searchSales(eq(new SaleSearchFilter(null, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 1, 31),
 				null, SaleStatus.COMPLETED, 10000L, null)), eq(0), eq(20));
+	}
+
+	@Test
+	@DisplayName("Should pass the X-Store-Id header as the store filter of sales and revenue")
+	void shouldFilterByStoreHeader() throws Exception {
+		UUID storeUuid = UUID.randomUUID();
+		when(service.searchSales(any(SaleSearchFilter.class), anyInt(), anyInt()))
+				.thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+		mockMvc.perform(get("/api/criteria/sales").header(StoreHeader.NAME, storeUuid)).andExpect(status().isOk());
+		verify(service).searchSales(eq(new SaleSearchFilter(storeUuid, null, null, null, null, null, null)), eq(0), eq(20));
+
+		mockMvc.perform(get("/api/criteria/revenue-by-category").header(StoreHeader.NAME, storeUuid)).andExpect(status().isOk());
+		verify(service).revenueByCategory(storeUuid, null, null, null);
 	}
 
 	@Test
@@ -128,7 +144,7 @@ class CriteriaQueryControllerTest {
 	@Test
 	@DisplayName("Should return the revenue per category list")
 	void shouldReturnRevenueByCategory() throws Exception {
-		when(service.revenueByCategory(LocalDate.of(2026, 1, 1), LocalDate.of(2026, 3, 31), 100000L))
+		when(service.revenueByCategory(null, LocalDate.of(2026, 1, 1), LocalDate.of(2026, 3, 31), 100000L))
 				.thenReturn(List.of(new CategoryRevenueResponse("Bebidas", 320L, new BigDecimal("812.000"), 1250000L)));
 
 		mockMvc.perform(get("/api/criteria/revenue-by-category")

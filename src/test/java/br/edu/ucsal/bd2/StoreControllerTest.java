@@ -22,9 +22,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -105,16 +107,30 @@ class StoreControllerTest {
     }
 
     @Test
-    @DisplayName("Deve responder 409 (nome ou gerente repetido) e 404 (gerente inexistente) ao criar")
-    void shouldReturnConflictAndNotFound() throws Exception {
+    @DisplayName("Ao criar, deve responder 409 (nome repetido) e 400 (loja nova com gerente)")
+    void shouldReturnConflictAndBadRequestOnCreate() throws Exception {
         when(service.createStore(any(StoreRequest.class)))
-                .thenThrow(new EntityExistsException("Esse funcionário já gerencia outra loja."))
-                .thenThrow(new EntityNotFoundException("Funcionário com uuid: " + managerUuid + " não encontrado."));
+                .thenThrow(new EntityExistsException("Já existe uma loja com esse nome."))
+                .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "Uma loja nova ainda não tem funcionários."));
 
         mockMvc.perform(post("/api/store").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isConflict());
         mockMvc.perform(post("/api/store").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Ao atualizar, deve responder 404 (gerente inexistente) e 409 (gerente que não trabalha na loja)")
+    void shouldReturnNotFoundAndConflictOnUpdate() throws Exception {
+        UUID storeUuid = UUID.randomUUID();
+        when(service.updateStore(eq(storeUuid), any(StoreRequest.class)))
+                .thenThrow(new EntityNotFoundException("Funcionário com uuid: " + managerUuid + " não encontrado."))
+                .thenThrow(new ResponseStatusException(HttpStatus.CONFLICT, "O funcionário não trabalha nessa loja."));
+
+        mockMvc.perform(put("/api/store/" + storeUuid).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
                 .andExpect(status().isNotFound());
+        mockMvc.perform(put("/api/store/" + storeUuid).contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(request())))
+                .andExpect(status().isConflict());
     }
 
     @Test
@@ -143,14 +159,17 @@ class StoreControllerTest {
     }
 
     @Test
-    @DisplayName("Deve apagar com 204 e responder 404 quando a loja não existe")
+    @DisplayName("Deve apagar com 204 e responder 404 (loja inexistente) e 409 (loja com funcionários ativos)")
     void shouldDeleteStore() throws Exception {
         UUID uuid = UUID.randomUUID();
         UUID missing = UUID.randomUUID();
+        UUID staffed = UUID.randomUUID();
         doThrow(new EntityNotFoundException("Loja com uuid: " + missing + " não encontrada.")).when(service).deleteStore(missing);
+        doThrow(new ResponseStatusException(HttpStatus.CONFLICT, "A loja tem 3 funcionário(s) ativo(s).")).when(service).deleteStore(staffed);
 
         mockMvc.perform(delete("/api/store/" + uuid)).andExpect(status().isNoContent());
         verify(service).deleteStore(uuid);
         mockMvc.perform(delete("/api/store/" + missing)).andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/store/" + staffed)).andExpect(status().isConflict());
     }
 }

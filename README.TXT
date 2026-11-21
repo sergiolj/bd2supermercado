@@ -151,9 +151,9 @@ Os testes automatizados (./mvnw test) também usam o PostgreSQL configurado no .
 (GrocerystoreApplicationTests) sobe a aplicação inteira e conecta no banco, então o PostgreSQL precisa estar rodando.
 
 Dados de exemplo (seed)
-Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 15 funcionários e
-2.000 vendas distribuídas em 26 meses, com histórico de preços, pagamentos, compras e perdas de estoque
-coerentes entre si. Leva alguns segundos.
+Popula o banco com dados semi-realistas: 20 categorias, 200 produtos, 100 fornecedores, 3 lojas, 16 funcionários e
+2.000 vendas distribuídas em 26 meses entre as lojas, com histórico de preços, pagamentos, compras e perdas de estoque
+coerentes entre si (cada loja com o seu estoque). Leva alguns segundos.
 
 ./mvnw -Pseed                (PowerShell: .\mvnw -Pseed)
 
@@ -169,9 +169,9 @@ docker exec grocery-pg psql -U postgres -d grocery -f /tmp/seed.sql
 
 Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:run "-Dspring-boot.run.profiles=seed"
 
-- O seed é idempotente: se o banco já tiver fornecedores, funcionários, preços, vendas ou estoque, ele não faz nada.
+- O seed é idempotente: se o banco já tiver lojas, fornecedores, funcionários, preços, vendas ou estoque, ele não faz nada.
 - Para refazer do zero (apaga TODOS os dados):
-  TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, staff RESTART IDENTITY CASCADE;
+  TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, store, staff, customer, person RESTART IDENTITY CASCADE;
   Ao subir a aplicação de novo o Config.java recria as categorias e o produto básicos, e o seed completa o resto.
   Com Docker, o console do banco abre com: docker exec -it grocery-pg psql -U postgres -d grocery
   (ou recrie tudo com docker compose down -v seguido de docker compose up -d).
@@ -180,6 +180,31 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 
 Swagger para testes de endpoints
 http://localhost:8080/swagger-ui/index.html
+
+Multi-loja (header X-Store-Id)
+A rede tem várias lojas. Cada loja tem os seus funcionários, as suas vendas e o seu estoque; o catálogo (categorias,
+produtos e preços), os fornecedores e os clientes são da rede, compartilhados por todas.
+  Tabelas com store_id: staff, sale, inventory (uma linha por loja e produto) e inventory_movement.
+  payment e sale_items não repetem a loja: chegam a ela pela venda.
+
+As operações de uma loja dizem de qual loja são pelo header X-Store-Id, com o uuid da loja (GET /api/store lista as lojas):
+  /api/purchase                          obrigatório: sem ele 400; loja inexistente ou apagada 404.
+                                         Uma loja não vê nem apaga as compras de outra (404).
+  GET /api/staff                         opcional: com ele, só os funcionários da loja; sem ele, a rede inteira.
+  /api/criteria/sales e revenue-by-category  opcional: com ele, só a loja; sem ele, a rede inteira.
+No Swagger o header aparece como parâmetro da operação. Com curl: -H "X-Store-Id: <uuid da loja>".
+
+Regras (garantidas no service e também no banco, em db/store_constraints.sql):
+  - Todo funcionário trabalha numa loja (storeUuid no cadastro), menos o ADMIN, que é da rede e fica sem loja.
+    Trocar o storeUuid no PUT transfere o funcionário.
+  - O gerente é funcionário da própria loja. Por isso a loja nasce sem gerente: cadastre a loja, depois o funcionário
+    nela e então defina o gerente com PUT /api/store/{uuid}. Para transferir o gerente, troque antes o gerente da loja.
+  - Loja com funcionários ativos não pode ser apagada.
+  - O vendedor trabalha na loja da venda, e a movimentação de uma venda mexe no estoque da loja da venda.
+
+Banco criado antes da loja entrar no modelo: a aplicação para na subida com uma mensagem pedindo para recriar os dados
+(o ddl-auto=update não consegue criar store_id NOT NULL em tabelas que já têm linhas). Rode docker compose down -v,
+docker compose up -d e ./mvnw -Pseed, ou o TRUNCATE acima seguido do seed.
 
 Paginação
 As listagens (ex.: GET /api/product) são paginadas, nunca devolvem a tabela inteira.

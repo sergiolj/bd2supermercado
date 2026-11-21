@@ -2,6 +2,7 @@ package br.edu.ucsal.bd2;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -32,9 +33,11 @@ import org.springframework.web.server.ResponseStatusException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import br.edu.ucsal.bd2.controller.StaffController;
+import br.edu.ucsal.bd2.controller.StoreHeader;
 import br.edu.ucsal.bd2.dto.request.StaffRequest;
 import br.edu.ucsal.bd2.model.Address;
 import br.edu.ucsal.bd2.model.Staff;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.service.StaffService;
 import br.edu.ucsal.bd2.util.StaffRole;
 import jakarta.persistence.EntityExistsException;
@@ -52,11 +55,18 @@ class StaffControllerTest {
     @MockitoBean
     private StaffService service;
 
+    private final UUID storeUuid = UUID.randomUUID();
+
     // id interno preenchido de propósito: os testes garantem que ele NUNCA aparece na resposta.
     private Staff newStaff() {
         Address address = new Address();
         address.setCity("Salvador");
         address.setState("BA");
+
+        Store store = new Store();
+        store.setId(5L);
+        store.setUuid(storeUuid);
+        store.setName("Loja Pituba");
 
         Staff staff = new Staff();
         staff.setId(1L);
@@ -64,18 +74,19 @@ class StaffControllerTest {
         staff.setTaxNumber("52998224725");
         staff.setName("Marina Teixeira");
         staff.setRole(StaffRole.MANAGER);
+        staff.setStore(store);
         staff.setEmail("marina@mercado.com");
         staff.setAddress(address);
         return staff;
     }
 
     private StaffRequest request() {
-        return new StaffRequest("529.982.247-25", "Marina Teixeira", StaffRole.MANAGER, "marina@mercado.com",
+        return new StaffRequest("529.982.247-25", "Marina Teixeira", StaffRole.MANAGER, storeUuid, "marina@mercado.com",
                 null, null, null, null, "Salvador", "BA", null);
     }
 
     @Test
-    @DisplayName("Deve criar o funcionário e responder 201 com o perfil e sem o id interno")
+    @DisplayName("Deve criar o funcionário e responder 201 com o perfil, a loja (uuid e nome) e sem ids internos")
     void shouldCreateStaff() throws Exception {
         Staff staff = newStaff();
         when(service.createStaff(any(StaffRequest.class))).thenReturn(staff);
@@ -86,6 +97,8 @@ class StaffControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.uuid").value(staff.getUuid().toString()))
                 .andExpect(jsonPath("$.role").value("MANAGER"))
+                .andExpect(jsonPath("$.storeUuid").value(storeUuid.toString()))
+                .andExpect(jsonPath("$.storeName").value("Loja Pituba"))
                 .andExpect(jsonPath("$.city").value("Salvador"))
                 .andExpect(jsonPath("$.id").doesNotExist());
 
@@ -118,17 +131,32 @@ class StaffControllerTest {
     @Test
     @DisplayName("Deve listar com paginação (padrão 0/20) e limitar o tamanho da página a 100")
     void shouldListWithPagination() throws Exception {
-        when(service.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(newStaff()), PageRequest.of(0, 20), 1));
+        when(service.findAll(isNull(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(newStaff()), PageRequest.of(0, 20), 1));
 
         mockMvc.perform(get("/api/staff"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].name").value("Marina Teixeira"))
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.content[0].id").doesNotExist());
-        verify(service).findAll(PageRequest.of(0, 20));
+        verify(service).findAll(null, PageRequest.of(0, 20));
 
         mockMvc.perform(get("/api/staff").param("page", "-3").param("size", "5000")).andExpect(status().isOk());
-        verify(service).findAll(PageRequest.of(0, 100));
+        verify(service).findAll(null, PageRequest.of(0, 100));
+    }
+
+    @Test
+    @DisplayName("Com o header X-Store-Id, lista só os funcionários da loja; loja inexistente responde 404")
+    void shouldListByStoreHeader() throws Exception {
+        UUID missing = UUID.randomUUID();
+        when(service.findAll(eq(storeUuid), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(newStaff()), PageRequest.of(0, 20), 1));
+        when(service.findAll(eq(missing), any(Pageable.class))).thenThrow(new EntityNotFoundException("Loja com uuid: " + missing + " não encontrada."));
+
+        mockMvc.perform(get("/api/staff").header(StoreHeader.NAME, storeUuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].storeName").value("Loja Pituba"));
+        verify(service).findAll(storeUuid, PageRequest.of(0, 20));
+
+        mockMvc.perform(get("/api/staff").header(StoreHeader.NAME, missing)).andExpect(status().isNotFound());
     }
 
     @Test
