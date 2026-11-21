@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -27,6 +28,7 @@ import br.edu.ucsal.bd2.model.Product;
 import br.edu.ucsal.bd2.model.Sale;
 import br.edu.ucsal.bd2.model.SaleItem;
 import br.edu.ucsal.bd2.model.Staff;
+import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.util.SaleStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -48,8 +50,10 @@ import jakarta.persistence.criteria.Root;
  * e só os preenchidos entram no WHERE, sem concatenar strings.
  *
  * 1) searchProducts  - produtos com filtros dinâmicos (nome, categoria, faixa de preço, unidade) + paginação
- * 2) searchSales     - vendas com filtros dinâmicos (período, vendedor, status, faixa de valor) + paginação
+ * 2) searchSales     - vendas com filtros dinâmicos (loja, período, vendedor, status, faixa de valor) + paginação
  * 3) revenueByCategory - faturamento por categoria num período (GROUP BY, SUM, COUNT DISTINCT, HAVING)
+ *
+ * As consultas 2 e 3 olham uma loja (header X-Store-Id) ou a rede inteira. A 1 é só do catálogo, que é da rede.
  */
 @Service
 @Transactional(readOnly = true)
@@ -63,6 +67,12 @@ public class CriteriaQueryService {
 
 	@PersistenceContext
 	private EntityManager em;
+
+	private final StoreService storeService;
+
+	public CriteriaQueryService(StoreService storeService) {
+		this.storeService = storeService;
+	}
 
 	// ------------------------------------------------------------------------------------------------
 	// 1) Busca de produtos com filtros dinâmicos
@@ -149,9 +159,9 @@ public class CriteriaQueryService {
 	// 2) Busca de vendas com filtros dinâmicos
 	//
 	// SQL equivalente (com todos os filtros preenchidos):
-	//   SELECT s.uuid, s.created_at, s.status, s.total_amount_in_cents, st.name
-	//     FROM sale s JOIN staff st ON st.id = s.seller_id
-	//    WHERE s.created_at >= ? AND s.created_at < ? AND st.uuid = ? AND s.status = ?
+	//   SELECT s.uuid, s.created_at, s.status, s.total_amount_in_cents, lo.name, st.name
+	//     FROM sale s JOIN store lo ON lo.id = s.store_id JOIN staff st ON st.id = s.seller_id
+	//    WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at < ? AND st.uuid = ? AND s.status = ?
 	//      AND s.total_amount_in_cents BETWEEN ? AND ?
 	//    ORDER BY s.created_at DESC, s.id DESC  LIMIT ? OFFSET ?
 	// ------------------------------------------------------------------------------------------------
@@ -159,10 +169,12 @@ public class CriteriaQueryService {
 		validateRange(filter.from(), filter.to(), "from", "to");
 		validateRange(filter.minTotalInCents(), filter.maxTotalInCents(), "minTotalInCents", "maxTotalInCents");
 		PageRequest pageRequest = pageRequest(page, size);
+		Store store = optionalStore(filter.storeUuid());
 		CriteriaBuilder cb = em.getCriteriaBuilder();
 
 		CriteriaQuery<SaleSummaryResponse> cq = cb.createQuery(SaleSummaryResponse.class);
 		Root<Sale> sale = cq.from(Sale.class);
+		Join<Sale, Store> saleStore = sale.join("store");
 		Join<Sale, Staff> seller = sale.join("seller");
 
 		cq.select(cb.construct(SaleSummaryResponse.class,
@@ -170,8 +182,9 @@ public class CriteriaQueryService {
 				sale.get("createdAt"),
 				sale.get("status"),
 				sale.get("totalAmountInCents"),
+				saleStore.get("name"),
 				seller.get("name")))
-			.where(salePredicates(cb, filter, sale, seller))
+			.where(salePredicates(cb, filter, store, sale, seller))
 			.orderBy(cb.desc(sale.get("createdAt")), cb.desc(sale.get("id")));
 
 		List<SaleSummaryResponse> content = em.createQuery(cq)
@@ -183,16 +196,20 @@ public class CriteriaQueryService {
 		Root<Sale> countSale = countQuery.from(Sale.class);
 		Join<Sale, Staff> countSeller = countSale.join("seller");
 		countQuery.select(cb.count(countSale))
-			.where(salePredicates(cb, filter, countSale, countSeller));
+			.where(salePredicates(cb, filter, store, countSale, countSeller));
 		long total = em.createQuery(countQuery).getSingleResult();
 
 		return new PageImpl<>(content, pageRequest, total);
 	}
 
-	private Predicate[] salePredicates(CriteriaBuilder cb, SaleSearchFilter filter,
+	private Predicate[] salePredicates(CriteriaBuilder cb, SaleSearchFilter filter, Store store,
 			Root<Sale> sale, Join<Sale, Staff> seller) {
 		List<Predicate> predicates = new ArrayList<>();
 
+		// Comparar com a entidade vira sale.store_id = ?, sem precisar do JOIN com store.
+		if (store != null) {
+			predicates.add(cb.equal(sale.get("store"), store));
+		}
 		if (filter.from() != null) {
 			predicates.add(cb.greaterThanOrEqualTo(sale.<Instant>get("createdAt"), startOfDay(filter.from())));
 		}
@@ -223,7 +240,7 @@ public class CriteriaQueryService {
 	//   SELECT c.name, COUNT(DISTINCT s.id), SUM(i.quantity), SUM(i.quantity * i.unit_price_in_cents)
 	//     FROM sale_items i JOIN sale s ON s.id = i.sale_id
 	//     JOIN product p ON p.id = i.product_id JOIN category c ON c.id = p.category_id
-	//    WHERE s.status = 'COMPLETED' AND s.created_at >= ? AND s.created_at < ?
+	//    WHERE s.status = 'COMPLETED' AND s.store_id = ? AND s.created_at >= ? AND s.created_at < ?
 	//    GROUP BY c.name
 	//   HAVING SUM(i.quantity * i.unit_price_in_cents) >= ?
 	//    ORDER BY 4 DESC
@@ -231,8 +248,9 @@ public class CriteriaQueryService {
 	// Só vendas COMPLETED contam como faturamento (mesma regra da granularidade do DW).
 	// Usa Tuple porque o SUM de quantidade × preço sai como BigDecimal e é arredondado para centavos em Java.
 	// ------------------------------------------------------------------------------------------------
-	public List<CategoryRevenueResponse> revenueByCategory(LocalDate from, LocalDate to, Long minRevenueInCents) {
+	public List<CategoryRevenueResponse> revenueByCategory(UUID storeUuid, LocalDate from, LocalDate to, Long minRevenueInCents) {
 		validateRange(from, to, "from", "to");
+		Store store = optionalStore(storeUuid);
 		CriteriaBuilder cb = em.getCriteriaBuilder();
 
 		CriteriaQuery<Tuple> cq = cb.createTupleQuery();
@@ -249,6 +267,9 @@ public class CriteriaQueryService {
 
 		List<Predicate> where = new ArrayList<>();
 		where.add(cb.equal(sale.get("status"), SaleStatus.COMPLETED));
+		if (store != null) {
+			where.add(cb.equal(sale.get("store"), store));
+		}
 		if (from != null) {
 			where.add(cb.greaterThanOrEqualTo(sale.<Instant>get("createdAt"), startOfDay(from)));
 		}
@@ -281,6 +302,11 @@ public class CriteriaQueryService {
 	// ------------------------------------------------------------------------------------------------
 	// Auxiliares
 	// ------------------------------------------------------------------------------------------------
+
+	// Sem uuid, a consulta é da rede inteira. Com uuid, a loja precisa existir e estar ativa (senão 404).
+	private Store optionalStore(UUID storeUuid) {
+		return storeUuid == null ? null : storeService.findByUuid(storeUuid);
+	}
 
 	private static PageRequest pageRequest(int page, int size) {
 		if (page < 0) {

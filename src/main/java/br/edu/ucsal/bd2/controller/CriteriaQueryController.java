@@ -8,6 +8,7 @@ import java.util.function.Function;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,13 +23,16 @@ import br.edu.ucsal.bd2.service.CriteriaQueryService;
 import br.edu.ucsal.bd2.util.MeasurementType;
 import br.edu.ucsal.bd2.util.SaleStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 // Endpoints das 3 consultas com Criteria API (Ref. §4.2 item 5). Todos os filtros são opcionais.
-// Datas no formato ISO (2026-01-31). Valores em centavos.
+// Datas no formato ISO (2026-01-31). Valores em centavos. Vendas e faturamento aceitam o header X-Store-Id para olhar
+// uma loja só; sem ele, valem para a rede inteira.
 @Tag(name = "Consultas (Criteria API)", description = "Consultas de leitura montadas com a Criteria API da JPA. "
-		+ "Todos os filtros são opcionais; datas no formato ISO (2026-01-31) e valores em centavos.")
+		+ "Todos os filtros são opcionais; datas no formato ISO (2026-01-31) e valores em centavos. Vendas e faturamento "
+		+ "olham a loja do header X-Store-Id, ou a rede inteira sem ele.")
 @RestController
 @RequestMapping("/api/criteria")
 public class CriteriaQueryController {
@@ -60,13 +64,15 @@ public class CriteriaQueryController {
 	}
 
 	// GET /api/criteria/sales?from=2026-01-01&to=2026-01-31&status=COMPLETED&minTotalInCents=10000
-	@Operation(summary = "Criteria 2: busca de vendas com filtros dinâmicos (período, vendedor, status, valor)",
+	@Operation(summary = "Criteria 2: busca de vendas com filtros dinâmicos (loja, período, vendedor, status, valor)",
 			description = "`from` e `to` são inclusivos e contam dias do fuso America/Bahia. Mais recentes primeiro; "
 					+ "`page` começa em 0 e `size` vai até 100 (padrão 20).")
 	@ApiResponse(responseCode = "200", description = "Página de vendas")
 	@ApiResponse(responseCode = "400", description = "`from` depois de `to`, `minTotalInCents` maior que `maxTotalInCents`, ou `page` negativo")
+	@ApiResponse(responseCode = "404", description = "Loja do header inexistente ou apagada")
 	@GetMapping("/sales")
 	public ResponseEntity<PageResponse<SaleSummaryResponse>> searchSales(
+			@Parameter(description = StoreHeader.OPTIONAL) @RequestHeader(value = StoreHeader.NAME, required = false) UUID storeUuid,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
 			@RequestParam(required = false) UUID sellerUuid,
@@ -76,7 +82,7 @@ public class CriteriaQueryController {
 			@RequestParam(defaultValue = "0") int page,
 			@RequestParam(defaultValue = "20") int size) {
 
-		SaleSearchFilter filter = new SaleSearchFilter(from, to, sellerUuid, status, minTotalInCents, maxTotalInCents);
+		SaleSearchFilter filter = new SaleSearchFilter(storeUuid, from, to, sellerUuid, status, minTotalInCents, maxTotalInCents);
 		return ResponseEntity.ok(PageResponse.from(service.searchSales(filter, page, size), Function.identity()));
 	}
 
@@ -86,12 +92,14 @@ public class CriteriaQueryController {
 					+ "valor. Ordenado do maior faturamento para o menor.")
 	@ApiResponse(responseCode = "200", description = "Faturamento por categoria")
 	@ApiResponse(responseCode = "400", description = "`from` depois de `to`")
+	@ApiResponse(responseCode = "404", description = "Loja do header inexistente ou apagada")
 	@GetMapping("/revenue-by-category")
 	public ResponseEntity<List<CategoryRevenueResponse>> revenueByCategory(
+			@Parameter(description = StoreHeader.OPTIONAL) @RequestHeader(value = StoreHeader.NAME, required = false) UUID storeUuid,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
 			@RequestParam(required = false) Long minRevenueInCents) {
 
-		return ResponseEntity.ok(service.revenueByCategory(from, to, minRevenueInCents));
+		return ResponseEntity.ok(service.revenueByCategory(storeUuid, from, to, minRevenueInCents));
 	}
 }

@@ -36,6 +36,7 @@ import br.edu.ucsal.bd2.util.MeasurementType;
 import br.edu.ucsal.bd2.util.SaleStatus;
 import br.edu.ucsal.bd2.util.StaffRole;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
 
 // Roda as consultas Criteria de verdade no PostgreSQL do .env (como o GrocerystoreApplicationTests).
 // Cada teste cria os próprios dados com nomes únicos e o @Transactional desfaz tudo no fim,
@@ -55,7 +56,9 @@ class CriteriaQueryServiceIntegrationTest {
 
 	private Category category;
 	private Store store;
+	private Store otherStore;
 	private Staff seller;
+	private Staff otherSeller;
 	private Product rice;
 	private Product beans;
 
@@ -65,17 +68,10 @@ class CriteriaQueryServiceIntegrationTest {
 		category.setName(tag + " Mercearia");
 		em.persist(category);
 
-		// O vendedor trabalha na loja das vendas (o banco confere).
-		store = new Store();
-		store.setName(tag + " Loja");
-		em.persist(store);
-
-		seller = new Staff();
-		seller.setName(tag + " Vendedor");
-		seller.setTaxNumber(String.format("%011d", Math.floorMod((long) tag.hashCode(), 100_000_000_000L)));
-		seller.setRole(StaffRole.CASHIER);
-		seller.setStore(store);
-		em.persist(seller);
+		store = store(tag + " Loja");
+		otherStore = store(tag + " Outra Loja");
+		seller = seller(tag + " Vendedor", store);
+		otherSeller = seller(tag + " Vendedor da Outra", otherStore);
 
 		rice = product(tag + " Arroz 5kg", "1" + tag, MeasurementType.UNIT, 2899L);
 		beans = product(tag + " Feijao a granel", "2" + tag, MeasurementType.KG, 899L);
@@ -87,10 +83,12 @@ class CriteriaQueryServiceIntegrationTest {
 		old.setDeletedAt(Instant.now());
 		em.persist(old);
 
-		// Duas vendas concluídas e uma cancelada (que não conta como faturamento).
-		sale(SaleStatus.COMPLETED, item(rice, "2", 2899L), item(beans, "1.500", 899L)); // 5798 + 1348,5
-		sale(SaleStatus.COMPLETED, item(rice, "1", 2899L));                             // 2899
-		sale(SaleStatus.CANCELED, item(rice, "3", 2899L));
+		// Na loja do teste: duas vendas concluídas e uma cancelada (que não conta como faturamento).
+		sale(seller, SaleStatus.COMPLETED, item(rice, "2", 2899L), item(beans, "1.500", 899L)); // 5798 + 1348,5
+		sale(seller, SaleStatus.COMPLETED, item(rice, "1", 2899L));                             // 2899
+		sale(seller, SaleStatus.CANCELED, item(rice, "3", 2899L));
+		// Na outra loja: uma venda concluída, que só aparece sem o filtro de loja.
+		sale(otherSeller, SaleStatus.COMPLETED, item(beans, "10", 899L));                       // 8990
 		em.flush();
 	}
 
@@ -133,47 +131,92 @@ class CriteriaQueryServiceIntegrationTest {
 	@Test
 	@DisplayName("Criteria 2: filters sales by seller, status, period and minimum total")
 	void shouldSearchSales() {
-		SaleSearchFilter bySeller = new SaleSearchFilter(today, today, seller.getUuid(), null, null, null);
+		SaleSearchFilter bySeller = new SaleSearchFilter(null, today, today, seller.getUuid(), null, null, null);
 		assertEquals(3, service.searchSales(bySeller, 0, 20).getTotalElements());
 
-		SaleSearchFilter completedAbove = new SaleSearchFilter(null, null, seller.getUuid(), SaleStatus.COMPLETED, 5000L, null);
+		SaleSearchFilter completedAbove = new SaleSearchFilter(null, null, null, seller.getUuid(), SaleStatus.COMPLETED, 5000L, null);
 		Page<SaleSummaryResponse> page = service.searchSales(completedAbove, 0, 20);
 		assertEquals(1, page.getTotalElements());
 		assertEquals(tag + " Vendedor", page.getContent().get(0).sellerName());
+		assertEquals(tag + " Loja", page.getContent().get(0).storeName());
 
-		SaleSearchFilter yesterday = new SaleSearchFilter(today.minusDays(1), today.minusDays(1), seller.getUuid(), null, null, null);
+		SaleSearchFilter yesterday = new SaleSearchFilter(null, today.minusDays(1), today.minusDays(1), seller.getUuid(), null, null, null);
 		assertEquals(0, service.searchSales(yesterday, 0, 20).getTotalElements());
+	}
+
+	@Test
+	@DisplayName("Criteria 2: with a store, returns only that store's sales; an unknown store is 404")
+	void shouldSearchSalesOfOneStore() {
+		Page<SaleSummaryResponse> mine = service.searchSales(new SaleSearchFilter(store.getUuid(), today, today, null, null, null, null), 0, 20);
+		assertEquals(3, mine.getTotalElements());
+		assertTrue(mine.getContent().stream().allMatch(r -> r.storeName().equals(tag + " Loja")));
+
+		Page<SaleSummaryResponse> theirs = service.searchSales(new SaleSearchFilter(otherStore.getUuid(), today, today, null, null, null, null), 0, 20);
+		assertEquals(1, theirs.getTotalElements());
+		assertEquals(tag + " Vendedor da Outra", theirs.getContent().get(0).sellerName());
+
+		// O vendedor de uma loja não tem vendas na outra.
+		assertEquals(0, service.searchSales(new SaleSearchFilter(otherStore.getUuid(), null, null, seller.getUuid(), null, null, null), 0, 20)
+				.getTotalElements());
+
+		assertThrows(EntityNotFoundException.class,
+				() -> service.searchSales(new SaleSearchFilter(UUID.randomUUID(), null, null, null, null, null, null), 0, 20));
 	}
 
 	@Test
 	@DisplayName("Criteria 2: rejects an inverted period")
 	void shouldRejectInvertedPeriod() {
-		SaleSearchFilter inverted = new SaleSearchFilter(today, today.minusDays(1), null, null, null, null);
+		SaleSearchFilter inverted = new SaleSearchFilter(null, today, today.minusDays(1), null, null, null, null);
 		assertThrows(ResponseStatusException.class, () -> service.searchSales(inverted, 0, 20));
 	}
 
 	@Test
-	@DisplayName("Criteria 3: sums only completed sales per category")
+	@DisplayName("Criteria 3: sums only completed sales per category, for one store or for the whole network")
 	void shouldComputeRevenueByCategory() {
-		List<CategoryRevenueResponse> rows = service.revenueByCategory(today, today, null);
-
-		CategoryRevenueResponse mine = rows.stream()
-				.filter(r -> r.categoryName().equals(tag + " Mercearia"))
-				.findFirst().orElseThrow();
+		CategoryRevenueResponse mine = mineOf(service.revenueByCategory(store.getUuid(), today, today, null));
 
 		assertEquals(2L, mine.salesCount());
 		assertEquals(0, new BigDecimal("4.500").compareTo(mine.quantitySold())); // 2 + 1,5 + 1 (a cancelada fica fora)
 		assertEquals(10046L, mine.revenueInCents()); // 5798 + 1348,5 + 2899 = 10045,5 -> arredonda para 10046
+
+		CategoryRevenueResponse network = mineOf(service.revenueByCategory(null, today, today, null));
+		assertEquals(3L, network.salesCount());
+		assertEquals(0, new BigDecimal("14.500").compareTo(network.quantitySold())); // + 10 da outra loja
+		assertEquals(19036L, network.revenueInCents()); // 10045,5 + 8990 = 19035,5 -> 19036
 	}
 
 	@Test
 	@DisplayName("Criteria 3: HAVING removes categories below the minimum revenue")
 	void shouldApplyHaving() {
-		List<CategoryRevenueResponse> rows = service.revenueByCategory(today, today, 10047L);
+		List<CategoryRevenueResponse> rows = service.revenueByCategory(store.getUuid(), today, today, 10047L);
 		assertTrue(rows.stream().noneMatch(r -> r.categoryName().equals(tag + " Mercearia")));
 	}
 
+	private CategoryRevenueResponse mineOf(List<CategoryRevenueResponse> rows) {
+		return rows.stream()
+				.filter(r -> r.categoryName().equals(tag + " Mercearia"))
+				.findFirst().orElseThrow();
+	}
+
 	// ---------------------------------------------------------------------------------------------
+
+	private Store store(String name) {
+		Store store = new Store();
+		store.setName(name);
+		em.persist(store);
+		return store;
+	}
+
+	// CPF com 11 dígitos derivado do nome, para não repetir entre os vendedores do teste.
+	private Staff seller(String name, Store store) {
+		Staff seller = new Staff();
+		seller.setName(name);
+		seller.setTaxNumber(String.format("%011d", Math.floorMod((long) name.hashCode(), 100_000_000_000L)));
+		seller.setRole(StaffRole.CASHIER);
+		seller.setStore(store);
+		em.persist(seller);
+		return seller;
+	}
 
 	private Product product(String name, String barcode, MeasurementType unit, long priceInCents) {
 		Product product = new Product(name, category, barcode, null, unit);
@@ -194,9 +237,9 @@ class CriteriaQueryServiceIntegrationTest {
 		return item;
 	}
 
-	private void sale(SaleStatus status, SaleItem... items) {
+	private void sale(Staff seller, SaleStatus status, SaleItem... items) {
 		Sale sale = new Sale();
-		sale.setStore(store);
+		sale.setStore(seller.getStore());
 		sale.setSeller(seller);
 		sale.setStatus(status);
 		long total = 0;
