@@ -174,6 +174,7 @@ Se preferir manter a aplicação no ar depois de popular:  ./mvnw spring-boot:ru
 - O seed é idempotente: se o banco já tiver lojas, fornecedores, funcionários, preços, vendas ou estoque, ele não faz nada.
 - Para refazer do zero (apaga TODOS os dados):
   TRUNCATE sale, payment, sale_items, inventory_movement, inventory, price, product, category, supplier, store, staff, customer, person RESTART IDENTITY CASCADE;
+  Depois de refazer o OLTP, recarregue o DW do zero: POST /api/etl/run?completa=true
   Ao subir a aplicação de novo o Config.java recria as categorias e o produto básicos, e o seed completa o resto.
   Com Docker, o console do banco abre com: docker exec -it grocery-pg psql -U postgres -d grocery
   (ou recrie tudo com docker compose down -v seguido de docker compose up -d).
@@ -247,6 +248,34 @@ Venda concluída não é cancelada nem recebe pagamento (409): devolução não 
 Banco criado antes da loja entrar no modelo: a aplicação para na subida com uma mensagem pedindo para recriar os dados
 (o ddl-auto=update não consegue criar store_id NOT NULL em tabelas que já têm linhas). Rode docker compose down -v,
 docker compose up -d e ./mvnw -Pseed, ou o TRUNCATE acima seguido do seed.
+
+Data Warehouse e ETL (POST /api/etl/run)
+O DW fica no mesmo PostgreSQL, em schemas separados do OLTP (public):
+  stg          staging: o que o ETL extraiu do OLTP, já transformado (refeito a cada execução)
+  etl          procedures do ETL, tabela de UFs e log das execuções (etl.execucao)
+  dw_estrela   modelo estrela: fato_venda + dim_tempo, dim_produto, dim_cliente, dim_loja, dim_funcionario
+  dw_floco     floco de neve: dim_produto -> dim_categoria; dim_cliente e dim_loja -> dim_cidade -> dim_estado
+Granularidade: uma linha do fato por item de venda concluída (COMPLETED). Medidas em reais: quantidade, valor_bruto,
+desconto (0 enquanto o OLTP não registra desconto) e valor_liquido.
+
+A estrutura é criada a cada subida da aplicação (src/main/resources/db/dw/01_estrutura.sql e 02_etl.sql, pelo
+spring.sql.init), mas o DW só é carregado quando o ETL roda:
+  POST /api/etl/run                  incremental: só os itens de venda concluída que ainda não estão no DW
+  POST /api/etl/run?completa=true    esvazia o DW e carrega tudo de novo
+  (direto no banco: CALL etl.executar();  ou  CALL etl.executar(true);)
+A resposta traz as contagens de linhas de cada tabela do DW antes e depois da carga.
+
+O que o ETL faz (detalhes nos comentários de 02_etl.sql e em docs/dw/modelo-dw.md):
+  - chaves substitutas (sk_*) no DW; as chaves naturais são os uuids do OLTP
+  - dim_tempo gerada para os anos das vendas, no fuso das lojas (America/Bahia)
+  - padronização de textos (espaços, sigla da UF), nulos viram "Não informado", códigos traduzidos (cargo, unidade)
+  - venda sem cliente aponta para o membro fixo "Não identificado" (sk_cliente = 0)
+  - SCD tipo 2 na cidade/UF do cliente: mudar o endereço (PUT /api/customer) e rodar o ETL cria uma versão nova;
+    as vendas antigas continuam na versão antiga
+  - o floco reaproveita as chaves da estrela, então os dois fatos têm exatamente as mesmas linhas
+
+Demonstração: registrar e pagar uma venda em /api/sale -> POST /api/etl/run -> fatosInseridos > 0 e a venda aparece em
+dw_estrela.fato_venda (SELECT * FROM dw_estrela.fato_venda WHERE venda_uuid = '<uuid da venda>').
 
 Paginação
 As listagens (ex.: GET /api/product) são paginadas, nunca devolvem a tabela inteira.
