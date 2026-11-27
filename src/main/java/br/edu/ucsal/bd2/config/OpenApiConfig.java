@@ -13,6 +13,7 @@ import org.springframework.core.annotation.AnnotatedElementUtils;
 
 import br.edu.ucsal.bd2.controller.CategoryController;
 import br.edu.ucsal.bd2.controller.CriteriaQueryController;
+import br.edu.ucsal.bd2.controller.EtlController;
 import br.edu.ucsal.bd2.controller.CustomerController;
 import br.edu.ucsal.bd2.controller.PriceController;
 import br.edu.ucsal.bd2.controller.ProductController;
@@ -43,7 +44,8 @@ public class OpenApiConfig {
             PurchaseController.class,       // compra: dá entrada no estoque da loja
             CustomerController.class,       // cliente (o CPF pode ir na nota da venda)
             SaleController.class,           // venda: precisa de vendedor, preço vigente e estoque
-            CriteriaQueryController.class); // consultas sobre o que foi lançado
+            CriteriaQueryController.class,  // consultas sobre o que foi lançado
+            EtlController.class);           // carga do Data Warehouse com as vendas concluídas
 
     @Bean
     public OpenApiCustomizer sortTagsByTestFlow() {
