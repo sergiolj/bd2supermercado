@@ -48,7 +48,8 @@ class OpenApiConfigTest {
 				"Compras",
 				"Clientes",
 				"Vendas",
-				"Consultas (Criteria API)"),
+				"Consultas (Criteria API)",
+				"Data Warehouse (ETL)"),
 				sort(controllerTags));
 	}
 
