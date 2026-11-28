@@ -122,6 +122,26 @@ class StoreServiceTest {
     }
 
     @Test
+    @DisplayName("Não deve aceitar caixa ou estoquista como gerente")
+    void shouldRejectStaffWhoIsNotManager() {
+        UUID storeUuid = UUID.randomUUID();
+        Store store = existing(storeUuid, null);
+
+        for (StaffRole role : new StaffRole[] {StaffRole.CASHIER, StaffRole.STOCKIST}) {
+            Staff candidate = staffOf(store);
+            candidate.setRole(role);
+
+            ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                    () -> service.updateStore(storeUuid, request("Loja Antiga", candidate.getUuid())));
+
+            assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        }
+
+        assertNull(store.getManager());
+        verify(dao, never()).update(any());
+    }
+
+    @Test
     @DisplayName("O gerente precisa trabalhar na loja: funcionário de outra loja ou ADMIN (sem loja) é 409")
     void shouldRejectManagerFromOutsideTheStore() {
         UUID storeUuid = UUID.randomUUID();
