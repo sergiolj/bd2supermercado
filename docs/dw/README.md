@@ -170,11 +170,20 @@ CALL etl.executar_carga(false);
 SELECT * FROM etl.log_execucao;
 ```
 
+### Validacao de Volume e Cargas (Base `seed.sql` em Docker)
+- **Carga completa (`true`):** O `seed.sql` gera `2.000` vendas (`1.907` `COMPLETED` com `12.511` itens, `90` `CANCELED` com `535` itens e `3` `OPEN` com `14` itens), totalizando `13.060` registros em `public.sale_items`. Desses, **`12.511` itens** pertencem a vendas concluidas e sao carregados integralmente em `dw_estrela.fato_venda` e `dw_floco.fato_venda` (os `549` itens das `93` vendas nao concluidas sao descartados pelo filtro `status = 'COMPLETED'`).
+- **Carga incremental (`false`):** Validada apos criacao e quitacao de venda via API (`POST /api/sale` + `POST /api/sale/{uuid}/payment`), inserindo apenas o novo item (`12.511 -> 12.512`) sem duplicidade na chave `(venda_uuid, id_item_origem)`.
+
 ## 4. Comparativo de Desempenho (`EXPLAIN ANALYZE`)
-Consulta analitica agregando faturamento por loja, categoria, ano e mes sobre 12.517 itens vendidos:
+Consulta analitica agregando faturamento por loja, categoria, ano e mes sobre 12.511 itens vendidos:
 
 | Modelo | 1a Execucao | 2a Execucao (Cache) | Observacao Tecnica |
 | :--- | :---: | :---: | :--- |
 | **OLTP (`public`)** | 69,395 ms | 65,282 ms | Exige 4 JOINs transacionais, filtro de status, conversao de timezone e calculo aritmetico por linha |
 | **Estrela (`dw_estrela`)** | 36,155 ms | 37,193 ms | Reducao de ~45% no tempo; leitura direta de chaves surrogate inteiras e medidas pre-calculadas |
 | **Floco de Neve (`dw_floco`)** | 36,906 ms | 36,510 ms | Desempenho proximo ao Estrela neste volume, exigindo 1 JOIN adicional na hierarquia `dim_categoria` |
+
+## 5. Limitacoes Conhecidas do ETL
+- **Unidades de medida (`GRAM`, `LITER`, `MILLILITER`):** O `CASE` de padronizacao no staging mapeia `G`, `L` e `ML`, enquanto o enum `UnitOfMeasure` do OLTP persiste `GRAM`, `LITER` e `MILLILITER` (que permanecem em ingles via `ELSE`).
+- **Capitalizacao com `INITCAP`:** Aplicado sobre nomes de produtos, categorias, clientes e funcionarios, alterando preposicoes e grafias originais.
+- **Gatilho do SCD Tipo 2 (`dim_cliente`):** A verificacao de mudanca de `cidade`/`uf` le `stg.venda_item_stg`, portanto uma nova versao historica do cliente e gerada somente quando ele realiza uma nova venda concluida.
