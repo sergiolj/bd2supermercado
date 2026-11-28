@@ -75,10 +75,12 @@ public class StaffService {
         // O gerente precisa trabalhar na loja que gerencia. A conferência vem antes de mexer no funcionário, para a
         // consulta não levar ao banco (auto flush) uma transferência que a FK composta recusaria.
         dao.findManagedStore(staff).ifPresent(managed -> {
-            if (store == null || !managed.getUuid().equals(store.getUuid())) {
+            if (dto.role() != StaffRole.MANAGER
+                    || store == null
+                    || !managed.getUuid().equals(store.getUuid())) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
-                        "Funcionário é gerente da loja '" + managed.getName() + "' e precisa continuar nela. "
-                                + "Troque o gerente da loja antes de transferi-lo.");
+                        "Funcionário é gerente da loja '" + managed.getName()
+                                + "' e deve continuar como MANAGER nela. Troque o gerente antes de alterar o cargo ou a loja.");
             }
         });
 

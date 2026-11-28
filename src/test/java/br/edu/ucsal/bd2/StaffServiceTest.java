@@ -188,11 +188,14 @@ class StaffServiceTest {
     void shouldKeepManagerInHisStore() {
         UUID uuid = UUID.randomUUID();
         Staff staff = existing(uuid);
+        staff.setRole(StaffRole.MANAGER);
         when(dao.findManagedStore(staff)).thenReturn(Optional.of(pituba));
 
         for (StaffRequest away : new StaffRequest[] {
                 onlyRequired("Marina", StaffRole.MANAGER, barra.getUuid()),
-                onlyRequired("Marina", StaffRole.ADMIN, null)}) {
+                onlyRequired("Marina", StaffRole.ADMIN, null),
+                onlyRequired("Marina", StaffRole.CASHIER, pituba.getUuid())
+        }) {
             ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> service.updateStaff(uuid, away));
             assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
         }
