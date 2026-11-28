@@ -17,6 +17,7 @@ import br.edu.ucsal.bd2.model.Staff;
 import br.edu.ucsal.bd2.model.Store;
 import br.edu.ucsal.bd2.util.AddressBuilder;
 import br.edu.ucsal.bd2.util.TextRules;
+import br.edu.ucsal.bd2.util.StaffRole;
 import jakarta.persistence.EntityExistsException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.AllArgsConstructor;
@@ -70,6 +71,12 @@ public class StoreService {
         }
 
         Staff manager = findManager(dto.managerUuid());
+
+        if (manager != null && manager.getRole() != StaffRole.MANAGER) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "O gerente da loja precisa ter o cargo MANAGER.");
+        }
+
         if (manager != null && !worksAt(manager, store)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "O funcionário '" + manager.getName() + "' não trabalha nessa loja: o gerente precisa ser funcionário da própria loja.");
