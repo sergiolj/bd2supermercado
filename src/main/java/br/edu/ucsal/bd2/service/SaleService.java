@@ -85,23 +85,30 @@ public class SaleService {
         sale.setSeller(seller);
         sale.setClientTaxNumber(normalizeClientTaxNumber(dto.clientTaxNumber()));
         sale.setStatus(SaleStatus.OPEN);
+        sale.setTotalAmountInCents(addItemsAndCalculateTotal(sale, dto.items()));
 
-        Set<UUID> products = new HashSet<>();
-        long total = 0;
-        for (SaleItemRequest line : dto.items()) {
-            SaleItem item = buildItem(line, products);
-            item.setSale(sale);
-            sale.getItems().add(item);
-            total = addToTotal(total, item.totalInCents());
-        }
-        sale.setTotalAmountInCents(total);
-
-        // Só confere: o saldo pode mudar até o pagamento, e é na efetivação que ele é conferido de novo, travado.
+        // Só confere: o saldo pode mudar até o pagamento; na efetivação, ele é conferido de novo e travado.
         checkStock(store, sale.getItems(), false);
 
         dao.save(sale);
         return sale;
     }
+
+    private long addItemsAndCalculateTotal(Sale sale, List<SaleItemRequest> lines) {
+        Set<UUID> productsInSale = new HashSet<>();
+        long totalInCents = 0;
+
+        for (SaleItemRequest line : lines) {
+            SaleItem item = buildItem(line, productsInSale);
+            item.setSale(sale);
+            sale.getItems().add(item);
+            totalInCents = addToTotal(totalInCents, item.totalInCents());
+        }
+
+        return totalInCents;
+    }
+
+
 
     // Registra um pagamento recebido. O que quita o total efetiva a venda: COMPLETED e baixa de estoque, tudo na mesma
     // transação. Se a baixa falhar, o pagamento também não fica gravado.
