@@ -77,3 +77,113 @@ erDiagram
     DIM_CLIENTE ||--o{ FATO_VENDA : "sk_cliente"
     DIM_LOJA ||--o{ FATO_VENDA : "sk_loja"
     DIM_FUNCIONARIO ||--o{ FATO_VENDA : "sk_funcionario"
+```
+
+```mermaid
+erDiagram
+    FATO_VENDA {
+        uuid venda_uuid PK
+        bigint id_item_origem PK
+        int sk_tempo FK
+        int sk_produto FK
+        int sk_cliente FK
+        int sk_loja FK
+        int sk_funcionario FK
+        numeric quantidade
+        numeric preco_unitario
+        numeric valor_bruto
+        numeric desconto
+        numeric valor_liquido
+    }
+    DIM_TEMPO {
+        int sk_tempo PK
+        date data_completa
+        smallint dia
+        smallint mes
+        smallint trimestre
+        smallint semestre
+        smallint ano
+        boolean fim_de_semana
+    }
+    DIM_PRODUTO {
+        int sk_produto PK
+        uuid produto_uuid
+        varchar nome_produto
+        varchar unidade_medida
+        int sk_categoria FK
+    }
+    DIM_CATEGORIA {
+        int sk_categoria PK
+        varchar nome_categoria
+    }
+    DIM_CLIENTE {
+        int sk_cliente PK
+        uuid cliente_uuid
+        varchar nome_cliente
+        int sk_cidade FK
+        date data_inicio
+        date data_fim
+        boolean atual
+    }
+    DIM_LOJA {
+        int sk_loja PK
+        uuid loja_uuid
+        varchar nome_loja
+        int sk_cidade FK
+    }
+    DIM_CIDADE {
+        int sk_cidade PK
+        varchar nome_cidade
+        int sk_estado FK
+    }
+    DIM_ESTADO {
+        int sk_estado PK
+        char uf
+    }
+    DIM_FUNCIONARIO {
+        int sk_funcionario PK
+        uuid funcionario_uuid
+        varchar nome_funcionario
+        varchar cargo
+    }
+
+    DIM_TEMPO ||--o{ FATO_VENDA : "sk_tempo"
+    DIM_PRODUTO ||--o{ FATO_VENDA : "sk_produto"
+    DIM_CATEGORIA ||--o{ DIM_PRODUTO : "sk_categoria"
+    DIM_CLIENTE ||--o{ FATO_VENDA : "sk_cliente"
+    DIM_LOJA ||--o{ FATO_VENDA : "sk_loja"
+    DIM_CIDADE ||--o{ DIM_CLIENTE : "sk_cidade"
+    DIM_CIDADE ||--o{ DIM_LOJA : "sk_cidade"
+    DIM_ESTADO ||--o{ DIM_CIDADE : "sk_estado"
+    DIM_FUNCIONARIO ||--o{ FATO_VENDA : "sk_funcionario"
+```
+
+## 3. Execucao do ETL
+```sql
+-- Carga completa (recria dimensoes e fatos)
+CALL etl.executar_carga(true);
+
+-- Carga incremental (insere apenas novos itens de venda e aplica SCD Tipo 2)
+CALL etl.executar_carga(false);
+
+-- Auditoria das cargas
+SELECT * FROM etl.log_execucao;
+```
+
+### Validacao de Volume e Cargas (Base `seed.sql` em Docker)
+- **Carga completa (`true`):** O `seed.sql` gera `2.000` vendas (`1.907` `COMPLETED` com `12.511` itens, `90` `CANCELED` com `535` itens e `3` `OPEN` com `14` itens), totalizando `13.060` registros em `public.sale_items`. Desses, **`12.511` itens** pertencem a vendas concluidas e sao carregados integralmente em `dw_estrela.fato_venda` e `dw_floco.fato_venda` (os `549` itens das `93` vendas nao concluidas sao descartados pelo filtro `status = 'COMPLETED'`).
+- **Carga incremental (`false`):** Validada apos criacao e quitacao de venda via API (`POST /api/sale` + `POST /api/sale/{uuid}/payment`), inserindo apenas o novo item (`12.511 -> 12.512`) sem duplicidade na chave `(venda_uuid, id_item_origem)`.
+
+## 4. Comparativo de Desempenho (`EXPLAIN ANALYZE`)
+Consulta analitica agregando faturamento por loja, categoria, ano e mes sobre 12.511 itens vendidos:
+
+| Modelo | 1a Execucao | 2a Execucao (Cache) | Observacao Tecnica |
+| :--- | :---: | :---: | :--- |
+| **OLTP (`public`)** | 69,395 ms | 65,282 ms | Exige 4 JOINs transacionais, filtro de status, conversao de timezone e calculo aritmetico por linha |
+| **Estrela (`dw_estrela`)** | 36,155 ms | 37,193 ms | Reducao de ~45% no tempo; leitura direta de chaves surrogate inteiras e medidas pre-calculadas |
+| **Floco de Neve (`dw_floco`)** | 36,906 ms | 36,510 ms | Desempenho proximo ao Estrela neste volume, exigindo 1 JOIN adicional na hierarquia `dim_categoria` |
+
+## 5. Limitacoes Conhecidas do ETL
+- **Unidades de medida (`GRAM`, `LITER`, `MILLILITER`):** O `CASE` de padronizacao no staging mapeia `G`, `L` e `ML`, enquanto o enum `UnitOfMeasure` do OLTP persiste `GRAM`, `LITER` e `MILLILITER` (que permanecem em ingles via `ELSE`).
+- **Capitalizacao com `INITCAP`:** Aplicado sobre nomes de produtos, categorias, clientes e funcionarios, alterando preposicoes e grafias originais.
+- **Gatilho do SCD Tipo 2 (`dim_cliente`):** A verificacao de mudanca de `cidade`/`uf` le `stg.venda_item_stg`, portanto uma nova versao historica do cliente e gerada somente quando ele realiza uma nova venda concluida.
