@@ -195,10 +195,18 @@ As seções do Swagger seguem a ordem de um teste de ponta a ponta, em que cada 
   9. Vendas         precisa de vendedor da loja, preço vigente e estoque
   10. Consultas     relatórios (Criteria API) sobre o que foi lançado
   
-Fora dessa ordem, a seção jpql-query-controller (/api/jpql) traz as consultas em JPQL:
-    GET /api/jpql/total-by-customer   total gasto por cliente (@NamedQuery, GROUP BY/HAVING, paginado)
-    GET /api/jpql/revenue-by-store    faturamento por loja (@NamedQuery)
-    GET /api/jpql/top-products        produtos acima do preço médio (subconsulta) e mais vendidos por loja
+Fora dessa ordem, a seção jpql-query-controller (/api/jpql) traz as 10 consultas em JPQL (dao/JpqlQueryDAO.java).
+Períodos (from/to, AAAA-MM-DD, os dois inclusive) são opcionais: sem eles, valem os últimos 12 meses.
+   1 GET /api/jpql/customers/spending                 total gasto por cliente (@NamedQuery, GROUP BY/HAVING, paginado)
+   2 GET /api/jpql/stores/revenue                     faturamento por loja (@NamedQuery)
+   3 GET /api/jpql/products/above-average-price       produtos com preço acima da média (subconsulta)
+   4 GET /api/jpql/stores/{storeUuid}/top-products    mais vendidos de uma loja (junções)
+   5 GET /api/jpql/categories/monthly-revenue         faturamento por categoria e mês (EXTRACT, GROUP BY)
+   6 GET /api/jpql/customers/{customerUuid}/purchases histórico de compras com os itens (JOIN FETCH, paginado)
+   7 GET /api/jpql/sellers/performance                desempenho dos vendedores (herança JOINED; X-Store-Id opcional)
+   8 GET /api/jpql/customers/inactive?since=...       clientes sem compra desde a data (NOT EXISTS, paginado)
+   9 GET /api/jpql/stock/flow-by-category             entradas, vendas e perdas por categoria (CASE WHEN; X-Store-Id obrigatório)
+  10 GET /api/jpql/payments/mix-by-store              recebimentos por loja e forma de pagamento (caminho encadeado, BETWEEN)
 
 Dentro de cada seção, o caminho pai vem antes dos filhos (GET /api/store antes de GET /api/store/{storeUuid}).
 A ordem fica em config/OpenApiConfig.java; um controller novo precisa entrar lá (o OpenApiConfigTest acusa se faltar).
