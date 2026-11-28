@@ -9,7 +9,7 @@ que se responsabilizam por ele e são capazes de explicá-lo na arguição.
 
 | Integrante | Ferramenta | Onde foi usada | Como o resultado foi verificado |
 |---|---|---|---|
-| Sérgio | Claude (Anthropic), via Claude Code | Consultas JPQL 5 a 10 e testes de integração; rascunho das seções de OQL/JPQL, OLTP × OLAP, consultas OLAP, comparação de desempenho, introdução e conclusão | Execução dos testes automatizados no PostgreSQL; conferência dos resultados com SQL escrito à mão; leitura e revisão dos textos |
+| Sérgio | Claude (Anthropic), via Claude Code | Consultas JPQL 5 a 10 e testes de integração; revisão e complemento das consultas OLAP (`CUBE`, `GROUPING SETS`); medições de desempenho; rascunho das seções de OQL/JPQL, OLTP × OLAP, consultas OLAP, comparação de desempenho, introdução e conclusão | Execução dos testes automatizados no PostgreSQL; conferência dos resultados com SQL escrito à mão; leitura e revisão dos textos |
 | Pablo | *(a preencher)* | | |
 | Bruna | *(a preencher)* | | |
 | Pedro | *(a preencher)* | | |

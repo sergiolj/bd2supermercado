@@ -1,133 +1,124 @@
 # Comparação de desempenho: OLTP × estrela × floco de neve
 
-> Base teórica e método da tarefa "comparação de tempo com EXPLAIN ANALYZE" (Ref. §4.3 item 3; questões 9 e 12)
-> Responsável: Sérgio
-> **Status:** método definido. Ainda **não há medições**: elas dependem do DW carregado pelo ETL. A tabela de
-> resultados no fim fica para preencher.
+> Ref. §4.3 item 3; base para as questões 9 e 12 · Responsável: Sérgio
+> Consultas na seção 7 de `src/main/resources/db/dw/03_consultas_olap.sql` (escritas pelo Pedro, PR #17).
+> Medições refeitas com o método abaixo em 28/11/2026.
 
 ## 1. A pergunta
 
-A mesma pergunta de negócio, **faturamento por categoria e mês**, será respondida em três modelos:
+A mesma pergunta de negócio, **faturamento por loja, categoria, ano e mês**, foi respondida nos três modelos. As
+três consultas devolvem as mesmas 2.332 linhas e os mesmos valores.
 
-| Modelo | Caminho da consulta | Junções |
-|---|---|---|
-| OLTP (`public`) | `sale_items → sale → product → category` | 3 |
-| Estrela (`dw_estrela`) | `fato_venda → dim_tempo`, `fato_venda → dim_produto` (a categoria está dentro de `dim_produto`) | 2 |
-| Floco de neve (`dw_floco`) | `fato_venda → dim_tempo`, `fato_venda → dim_produto → dim_categoria` | 3 |
+| Modelo | Tabelas | Junções | Trabalho por linha |
+|---|---|---|---|
+| OLTP (`public`) | `sale_items`, `sale`, `product`, `category`, `store` | 4 | Filtra `status = 'COMPLETED'`, converte o fuso de `created_at` e extrai ano e mês, calcula `quantidade × preço` |
+| Estrela (`dw_estrela`) | `fato_venda`, `dim_loja`, `dim_produto`, `dim_tempo` | 3 | Nenhum: ano, mês e valor já estão gravados |
+| Floco (`dw_floco`) | `fato_venda`, `dim_loja`, `dim_produto`, `dim_categoria`, `dim_tempo` | 4 | Nenhum, mas a categoria exige uma junção a mais (`dim_produto → dim_categoria`) |
 
-Além do número de junções, o OLTP tem mais trabalho por linha:
-
-- **filtra o status** (`sale.status = 'COMPLETED'`); no DW, o ETL já deixou de fora as vendas canceladas e abertas;
-- **calcula o mês** de cada venda (`EXTRACT(MONTH FROM created_at)`); no DW, o mês está pronto em `dim_tempo`;
-- **calcula o valor** (`quantidade × preço`); no DW, `valor_liquido` é uma medida já gravada no fato.
-
-Essa é a tese do modelo dimensional (KIMBALL; ROSS, 2013): **transferir trabalho da consulta para a carga**.
+O floco tem o mesmo número de junções do OLTP, e ainda assim é mais rápido. Isso mostra que **o número de junções
+não é o único fator**: pesam também o tamanho das tabelas juntadas, o trabalho feito em cada linha e o tipo de
+agregação que o planejador consegue usar.
 
 ## 2. Como o PostgreSQL executa uma consulta
 
 Entre receber o SQL e devolver as linhas, o PostgreSQL passa por (POSTGRESQL GLOBAL DEVELOPMENT GROUP, 2024):
 
 1. **análise sintática** (*parser*) e **reescrita** (*rewriter*, que expande visões e regras);
-2. **planejamento** (*planner/optimizer*): gera planos alternativos e escolhe o de **menor custo estimado**, com
-   base nas estatísticas das tabelas (número de linhas, distribuição de valores) coletadas pelo `ANALYZE`;
+2. **planejamento** (*planner*): gera planos alternativos e escolhe o de **menor custo estimado**, com base nas
+   estatísticas das tabelas, coletadas pelo `ANALYZE`;
 3. **execução** (*executor*): percorre a árvore do plano escolhido.
 
-### 2.1 EXPLAIN × EXPLAIN ANALYZE
+`EXPLAIN` mostra só o plano e as estimativas. `EXPLAIN ANALYZE` **executa** a consulta e mostra os valores reais
+de tempo e linhas de cada nó. `BUFFERS` acrescenta quantas páginas vieram da memória (*shared hit*) e quantas do
+disco (*read*).
 
-- `EXPLAIN consulta` mostra o plano escolhido e as **estimativas**. **Não executa** a consulta.
-- `EXPLAIN ANALYZE consulta` **executa de verdade** e mostra, ao lado das estimativas, os **valores reais**:
-  tempo, número de linhas e de repetições (*loops*) de cada nó.
-- `EXPLAIN (ANALYZE, BUFFERS)` mostra também quantas páginas vieram da memória (*shared hit*) e quantas do disco
-  (*read*). Isso ajuda a separar o efeito do cache do efeito do plano.
+Como ler um plano:
+- **A árvore é lida de dentro para fora.** As leituras (`Seq Scan`) alimentam as junções (`Hash Join`), que
+  alimentam a agregação e a ordenação.
+- **`cost`** é uma estimativa em unidades arbitrárias, não em milissegundos. **`actual time`** é o tempo real em
+  ms, por repetição: multiplique por `loops`.
+- **`Execution Time`** é o total da execução, usado na comparação.
 
-Como o `ANALYZE` executa, um `EXPLAIN ANALYZE` de `UPDATE` ou `DELETE` altera dados. Nesta comparação só há
-`SELECT`, então não há risco.
+## 3. Método
 
-### 2.2 Como ler um plano
+1. **Mesmos dados:** carga completa do ETL; contagem e total conferidos nos três modelos (12.467 itens,
+   R$ 164.751,70).
+2. **Estatísticas atualizadas:** `VACUUM ANALYZE` em todas as tabelas envolvidas antes de medir.
+3. **Repetição:** 16 execuções de cada consulta, descartando a primeira (cache frio). Mediana das 15 restantes.
+4. **Escala:** o volume do seed é pequeno. Para ver a tendência, o banco foi copiado e o número de itens
+   multiplicado por 20 e por 80, nos dois lados (OLTP e DW), com as mesmas proporções.
+5. **Ambiente:** PostgreSQL 16 num container Linux, `work_mem` padrão de 4 MB e paralelismo padrão (até 2
+   *workers*). O `docker-compose.yml` do projeto usa o PostgreSQL 17: os tempos absolutos podem variar, mas as
+   estratégias de plano discutidas abaixo existem nas duas versões.
 
-```
-HashAggregate  (cost=812.40..815.90 rows=280 width=48) (actual time=9.812..9.901 rows=520 loops=1)
-  Group Key: c.name, (EXTRACT(month FROM s.created_at))
-  ->  Hash Join  (cost=95.10..701.22 rows=14824 width=40) (actual time=1.103..6.540 rows=14310 loops=1)
-        Hash Cond: (i.sale_id = s.id)
-        ->  Seq Scan on sale_items i  (...)
-        ->  Hash  (...)
-              ->  Seq Scan on sale s  (...)
-                    Filter: ((status)::text = 'COMPLETED'::text)
-Planning Time: 0.420 ms
-Execution Time: 10.112 ms
-```
-*(números ilustrativos, apenas para explicar a leitura)*
+## 4. Resultados
 
-- **A árvore é lida de dentro para fora.** Os nós mais indentados (as leituras) alimentam os de cima (junção e
-  agregação).
-- **`cost=início..total`** é a estimativa em **unidades arbitrárias** do planejador, não em milissegundos. Serve
-  para comparar planos entre si.
-- **`rows`** é o número de linhas estimado; em `actual`, o real. Uma diferença grande entre os dois mostra
-  estatística desatualizada e pode levar a um plano ruim.
-- **`actual time`** é o tempo real em ms, do início (primeira linha) ao fim (última linha). Ele é **por repetição**:
-  multiplique por `loops`.
-- **`Planning Time`** e **`Execution Time`** são os totais. A comparação usa principalmente o `Execution Time`.
+### 4.1 Volume do seed (12.467 itens)
 
-Nós mais comuns:
+| Modelo | Junções | Planning (ms) | Execution, mediana (ms) | Em relação ao OLTP |
+|---|---|---|---|---|
+| OLTP | 4 | 0,73 | 23,4 | — |
+| Estrela | 3 | 0,68 | 11,7 | −50% |
+| Floco | 4 | 0,73 | 13,3 | −43% (+14% sobre a estrela) |
 
-| Nó | Significado |
-|---|---|
-| `Seq Scan` | Lê a tabela inteira. Normal em consultas analíticas que usam quase todas as linhas |
-| `Index Scan` / `Index Only Scan` | Usa um índice. Bom para poucas linhas |
-| `Bitmap Heap Scan` | Índice para achar as páginas, depois lê as páginas em ordem. Meio-termo |
-| `Hash Join` | Monta uma tabela hash com o lado menor e varre o maior. Típico de fato × dimensão |
-| `Nested Loop` | Para cada linha de um lado, procura no outro. Bom quando um lado é pequeno e há índice |
-| `Merge Join` | Junta duas entradas já ordenadas |
-| `HashAggregate` / `GroupAggregate` | Executa o `GROUP BY` (por hash ou sobre dados ordenados) |
-| `MixedAggregate` | Aparece com `ROLLUP`/`CUBE`/`GROUPING SETS` |
-| `Gather` | Junta o trabalho de processos paralelos |
+### 4.2 Escala
 
-## 3. Método da medição
+| Itens no fato | OLTP (ms) | Estrela (ms) | Floco (ms) | OLTP ÷ estrela |
+|---|---|---|---|---|
+| 12.467 (seed) | 23,4 | 11,7 | 13,3 | 2,0× |
+| 249.340 (×20) | 659,8 | 65,3 | 73,6 | 10,1× |
+| 997.360 (×80) | 915,2 | 227,7 | 266,7 | 4,0× |
 
-Para a comparação ser justa:
+### 4.3 O efeito das estatísticas
 
-1. **Mesmos dados.** Os três modelos precisam representar as mesmas vendas: rodar o ETL completo e conferir que
-   o total geral bate nos três.
-2. **Estatísticas atualizadas.** Rodar `VACUUM ANALYZE` nas tabelas envolvidas antes de medir.
-3. **Mesmo resultado.** As três consultas devem devolver as mesmas linhas (categoria, mês, valor). Se não
-   devolverem, a comparação não vale.
-4. **Cache.** A primeira execução lê do disco e as seguintes da memória. Descartar a primeira e usar a
-   **mediana de 5 ou mais execuções**, registrando com `BUFFERS` se houve leitura de disco.
-5. **Paralelismo.** O PostgreSQL pode usar vários processos (`Gather`) num modelo e não em outro. Para comparar só
-   o efeito do modelo, medir também com `SET max_parallel_workers_per_gather = 0`.
-6. **Índices declarados.** Registrar quais índices existem: as chaves estrangeiras do fato e as chaves primárias
-   das dimensões. O plano depende deles.
-7. **Ambiente.** Anotar a versão do PostgreSQL (17 no `docker-compose.yml`), a máquina e o volume de linhas de
-   cada tabela.
+Na primeira rodada, feita logo depois da carga do DW e antes do `VACUUM ANALYZE`, os três modelos ficaram
+empatados, em torno de 23 ms. Com o fato recém-carregado, as estatísticas e o mapa de visibilidade das tabelas
+ainda não estavam atualizados. Por isso o ETL deveria terminar com `ANALYZE` nos fatos (ver pendências).
 
-## 4. O que se espera (hipóteses)
+## 5. Análise
 
-- **Estrela mais rápida que OLTP.** Menos junções, sem filtro de status, sem cálculo de mês e valor por linha, e
-  dimensões pequenas, que cabem inteiras numa tabela hash.
-- **Floco próximo da estrela.** A junção a mais (`dim_produto → dim_categoria`) envolve tabelas pequenas (200
-  produtos, 20 categorias), então o custo extra deve ser pequeno. A vantagem do floco é normalizar e economizar
-  espaço nas dimensões, não velocidade.
-- **Diferenças pequenas em números absolutos.** Com 2.000 vendas (cerca de 13 mil itens no seed atual), tudo roda em poucos
-  milissegundos. O que importa é a **proporção** entre os modelos e **o tipo de plano**: a vantagem do modelo
-  dimensional cresce com o volume. Vale discutir no relatório como cada plano escalaria para milhões de linhas.
+**Por que a estrela é mais rápida no volume do seed.** Os planos são parecidos: leituras sequenciais, junções por
+hash com as dimensões (todas pequenas, cabem em memória) e `HashAggregate`. A diferença está no trabalho por
+linha. O OLTP precisa:
+- calcular `EXTRACT(... FROM created_at AT TIME ZONE 'America/Bahia')` para cada uma das 12 mil linhas;
+- multiplicar quantidade por preço;
+- filtrar o status;
+- agrupar por chaves de texto mais largas (nome da loja e da categoria vindos de tabelas diferentes).
 
-Se as medições contrariarem alguma hipótese, isso deve ser **relatado e explicado** pelo plano, não escondido. É
-um resultado tão válido quanto o esperado.
+Na estrela, ano, mês e valor já estão prontos e a junção com `dim_tempo` é por um inteiro. É o que Kimball e
+Ross (2013) descrevem: o modelo dimensional **transfere trabalho da consulta para a carga**. O ETL calcula uma
+vez o que a análise usaria em toda consulta.
 
-## 5. Ameaças à validade
+**Por que a diferença salta para 10× com 250 mil itens.** No OLTP, o planejador trocou a agregação por hash por
+uma agregação sobre dados ordenados (`GroupAggregate`). A ordenação não coube nos 4 MB de `work_mem` e foi feita
+**em disco** (`Sort Method: external merge  Disk: 20376kB`), sem paralelismo. Na estrela, a agregação continuou por
+hash, em memória e em paralelo (`Partial HashAggregate` em 3 processos). O modelo dimensional mantém as chaves de
+agrupamento estreitas (inteiros e textos curtos de dimensões pequenas), e por isso escala melhor.
 
-- O volume pequeno aproxima os tempos e aumenta o peso do ruído.
-- Dados sintéticos (gerados com IA) podem ter uma distribuição diferente da real.
-- O cache do sistema operacional fica fora do controle do PostgreSQL.
-- A máquina de medição é um notebook de desenvolvimento, não um servidor.
+**Por que a diferença cai para 4× com 1 milhão.** No ×80, o OLTP passou a usar paralelismo (`Gather Merge` com 2
+*workers*), dividindo a ordenação em disco entre três processos. Continua 4 vezes mais lento que a estrela. A
+proporção não cresce em linha reta porque o planejador muda de estratégia conforme o volume. Isso confirma a
+recomendação de medir com o volume real, e não extrapolar a partir de amostras pequenas.
 
-## 6. Resultados (a preencher)
+**Estrela × floco.** O floco ficou entre 13% e 17% mais lento que a estrela em todos os volumes. A causa é a junção extra
+`dim_produto → dim_categoria`, presente nos planos como um `Hash Join` a mais sobre os 12 mil (ou 1 milhão de)
+resultados intermediários. Como a tabela de categorias tem 20 linhas, o custo é pequeno, mas é constante e
+proporcional ao número de linhas do fato. O ganho do floco é outro: dimensões normalizadas, sem repetir o nome da
+categoria em cada produto. Isso importa mais quando as dimensões são grandes e mudam com frequência.
 
-| Modelo | Junções | Plano principal (nós) | Planning (ms) | Execution, mediana (ms) | Buffers hit/read |
-|---|---|---|---|---|---|
-| OLTP | 3 | | | | |
-| Estrela | 2 | | | | |
-| Floco | 3 | | | | |
+**Comparação com o PR #17.** O PR registrou cerca de 65 ms no OLTP e 36 ms nos dois modelos dimensionais (−45%).
+A proporção é parecida com a medida aqui no volume do seed (−50%). A diferença nos valores absolutos vem da
+máquina e de as medições do PR não terem `VACUUM ANALYZE` antes (seção 4.3).
 
-**Análise:** *(a escrever depois das medições, comparando os planos e respondendo às questões 9 e 12)*
+## 6. Ameaças à validade
+
+- **Volume pequeno.** No seed, tudo roda em milissegundos e o ruído pesa. O teste de escala foi feito para
+  compensar isso.
+- **Dados replicados.** As cópias ×20 e ×80 repetem as mesmas linhas, então os grupos têm a mesma distribuição. Num
+  volume real, com mais lojas, produtos e anos, o número de grupos cresceria e a agregação pesaria ainda mais.
+- **Dados sintéticos**, gerados com IA, podem ter uma distribuição diferente da real.
+- **Máquina de desenvolvimento**, não um servidor dedicado; o cache do sistema operacional fica fora do controle
+  do PostgreSQL.
+- **Índices diferentes.** O fato da estrela tem índices nas chaves estrangeiras e o do floco não. Nesta consulta,
+  que lê o fato inteiro, os índices não são usados (os planos mostram `Seq Scan`), mas eles fariam diferença em
+  consultas com filtros seletivos (slice e dice).

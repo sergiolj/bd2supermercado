@@ -115,11 +115,17 @@ PostgreSQL (POSTGRESQL GLOBAL DEVELOPMENT GROUP, 2024):
 
 | | OLTP | OLAP (DW) |
 |---|---|---|
-| Esquema no PostgreSQL | `public` | `dw_estrela` e `dw_floco` (com `stg` para o staging) |
-| Como os dados entram | API REST (`/api/sale`, `/api/purchase` etc.) | ETL em PL/pgSQL, disparado por `POST /api/etl/run` |
+| Esquema no PostgreSQL | `public` | `dw_estrela` e `dw_floco` (com `stg` para o staging e `etl` para o controle) |
+| Como os dados entram | API REST (`/api/sale`, `/api/purchase` etc.) | ETL em PL/pgSQL, em lote: `CALL etl.executar_carga(...)` |
 | Unidade de dado | Venda, item, pagamento, movimentação | Fato: uma linha por item vendido em venda concluída |
-| Consultas | JPQL e Criteria (Hibernate) | SQL nativo com `ROLLUP`/`CUBE` |
+| Consultas | JPQL e Criteria (Hibernate) | SQL nativo com `ROLLUP`/`CUBE` (`db/dw/03_consultas_olap.sql`) |
 | Histórico | Estado atual | Preservado (SCD tipo 2 na cidade do cliente) |
 
 A demonstração final mostra a ponte entre os dois mundos: uma venda registrada pela API (OLTP) passa pelo ETL e
 aparece nas consultas do DW (OLAP).
+
+O ETL **não** roda a cada venda. Ele é uma carga em lote, disparada sob demanda, e cada execução incremental
+carrega as vendas concluídas desde a anterior. Alimentar o DW por *trigger*, dentro da transação da venda, faria
+uma falha no DW desfazer a venda no caixa e deixaria o OLTP mais lento. Em produção, a carga seria agendada (por
+exemplo, de madrugada); quando é preciso dado quase em tempo real, usa-se captura de mudanças (CDC) a partir do
+log de transações, ainda fora da transação da venda.
